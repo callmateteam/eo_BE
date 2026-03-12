@@ -1,0 +1,51 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest*)",
+      "Bash(python -m ruff*)",
+      "Bash(python -m bandit*)",
+      "Bash(source .venv/bin/activate*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(curl -s http://localhost*)",
+      "Bash(grep -rn*)",
+      "Bash(find . -name*)",
+      "Bash(wc -l*)",
+      "Bash(pip list*)",
+      "Bash(pip install*)",
+      "Bash(aws sts get-caller-identity*)",
+      "Bash(aws ec2 describe*)",
+      "Bash(aws rds describe*)",
+      "Bash(aws s3api*)",
+      "Bash(aws iam*)",
+      "Bash(aws cloudwatch*)",
+      "Bash(docker build*)",
+      "Bash(docker-compose*)",
+      "Bash(ps aux*)",
+      "Bash(lsof*)",
+      "Bash(df -h*)"
+    ],
+    "deny": [
+      "Bash(rm -rf*)",
+      "Bash(git push --force*)",
+      "Bash(git reset --hard*)",
+      "Bash(aws * delete*)",
+      "Bash(aws * terminate*)",
+      "Bash(docker rm -f*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "command": "cd /Users/intalk/Desktop/개인/eo/be && source .venv/bin/activate 2>/dev/null && python -m ruff check --select E,F --quiet $CLAUDE_FILE_PATH 2>/dev/null || true"
+      }
+    ],
+    "PreCommit": [
+      {
+        "command": "cd /Users/intalk/Desktop/개인/eo/be && source .venv/bin/activate && python -m ruff check . && python -m pytest -q 2>/dev/null"
+      }
+    ]
+  }
+}

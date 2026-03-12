@@ -1,0 +1,23 @@
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "EO Backend"
+    VERSION: str = "0.1.0"
+    DEBUG: bool = False
+
+    DATABASE_URL: str = "postgresql+asyncpg://localhost:5432/eo"
+    SECRET_KEY: str = "change-me-in-production"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
+
+    # AWS
+    AWS_REGION: str = "ap-northeast-2"
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+
+settings = Settings()
