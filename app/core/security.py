@@ -1,9 +1,12 @@
-from datetime import UTC, datetime, timedelta
+from __future__ import annotations
+
+from datetime import timedelta
 
 from jose import jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings
+from app.core.timezone import now_kst
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -11,9 +14,7 @@ ALGORITHM = "HS256"
 
 
 def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
-    expire = datetime.now(UTC) + (
-        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
+    expire = now_kst() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode = {"exp": expire, "sub": str(subject)}
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
 

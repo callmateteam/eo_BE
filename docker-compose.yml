@@ -3,6 +3,8 @@ services:
     build: .
     ports:
       - "8000:8000"
+    environment:
+      TZ: Asia/Seoul
     env_file:
       - .env
     depends_on:
@@ -16,6 +18,8 @@ services:
       POSTGRES_DB: eo
       POSTGRES_USER: eo
       POSTGRES_PASSWORD: eo_local_dev
+      TZ: Asia/Seoul
+      PGTZ: Asia/Seoul
     ports:
       - "5432:5432"
     volumes:
