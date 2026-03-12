@@ -17,7 +17,18 @@ def mock_db():
     mock_user.create = AsyncMock()
     mock_prisma.user = mock_user
 
-    with patch("app.core.database.db", mock_prisma), patch("app.services.auth.db", mock_prisma):
+    mock_refresh = MagicMock()
+    mock_refresh.create = AsyncMock()
+    mock_refresh.find_unique = AsyncMock(return_value=None)
+    mock_refresh.delete = AsyncMock()
+    mock_refresh.delete_many = AsyncMock()
+    mock_prisma.refreshtoken = mock_refresh
+
+    with (
+        patch("app.core.database.db", mock_prisma),
+        patch("app.services.auth.db", mock_prisma),
+        patch("app.core.deps.db", mock_prisma),
+    ):
         yield mock_prisma
 
 

@@ -11,8 +11,14 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://localhost:5432/eo"
     SECRET_KEY: str = "change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    COOKIE_SECURE: bool = False  # 프로덕션에서는 True (HTTPS)
+    COOKIE_DOMAIN: str | None = None
 
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
+
+    # YouTube
+    YOUTUBE_API_KEY: str = ""
 
     # AWS
     AWS_REGION: str = "ap-northeast-2"

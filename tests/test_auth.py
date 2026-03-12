@@ -1,4 +1,9 @@
+from __future__ import annotations
+
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
+
+from app.core.security import create_access_token
 
 # ──────────────────────────────────────────────
 # 아이디 검증 API 테스트
@@ -227,15 +232,15 @@ class TestSignup:
 
 
 # ──────────────────────────────────────────────
-# 로그인 API 테스트
+# 로그인 API 테스트 (쿠키 기반)
 # ──────────────────────────────────────────────
 
 
 class TestLogin:
     """POST /api/auth/login"""
 
-    async def test_login_success(self, client, mock_db):
-        """정상 로그인"""
+    async def test_login_success_sets_cookies(self, client, mock_db):
+        """정상 로그인 시 쿠키에 토큰 설정"""
         from app.core.security import get_password_hash
 
         hashed = get_password_hash("MyPass123!")
@@ -251,10 +256,34 @@ class TestLogin:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["access_token"]
-        assert data["token_type"] == "bearer"
         assert data["username"] == "testuser"
         assert data["user_id"] == "550e8400-e29b-41d4-a716-446655440000"
+        assert data["message"] == "로그인에 성공했습니다."
+
+        # 쿠키 확인
+        cookies = {c.name: c for c in response.cookies.jar}
+        assert "access_token" in cookies
+        assert "refresh_token" in cookies
+
+    async def test_login_cookies_are_httponly(self, client, mock_db):
+        """쿠키가 HttpOnly로 설정되는지 확인"""
+        from app.core.security import get_password_hash
+
+        hashed = get_password_hash("MyPass123!")
+        user = MagicMock()
+        user.id = "some-uuid"
+        user.username = "testuser"
+        user.password = hashed
+        mock_db.user.find_unique = AsyncMock(return_value=user)
+
+        response = await client.post(
+            "/api/auth/login",
+            json={"username": "testuser", "password": "MyPass123!"},
+        )
+        # Set-Cookie 헤더에 httponly가 포함되어야 함
+        set_cookie_headers = response.headers.get_list("set-cookie")
+        for header in set_cookie_headers:
+            assert "httponly" in header.lower()
 
     async def test_login_wrong_password(self, client, mock_db):
         """잘못된 비밀번호"""
@@ -300,3 +329,95 @@ class TestLogin:
             json={"username": "testuser", "password": ""},
         )
         assert response.status_code == 422
+
+
+# ──────────────────────────────────────────────
+# 토큰 갱신 API 테스트
+# ──────────────────────────────────────────────
+
+
+class TestRefresh:
+    """POST /api/auth/refresh"""
+
+    async def test_refresh_success(self, client, mock_db):
+        """리프레시 토큰으로 액세스 토큰 갱신"""
+        # 리프레시 토큰 검증 시 반환할 유저+레코드
+        mock_record = MagicMock()
+        mock_record.id = "token-record-id"
+        mock_record.expiresAt = __import__("datetime").datetime(
+            2099, 1, 1, tzinfo=__import__("datetime").timezone.utc
+        )
+        mock_record.user = MagicMock()
+        mock_record.user.id = "user-uuid-123"
+        mock_record.user.username = "testuser"
+        mock_db.refreshtoken.find_unique = AsyncMock(return_value=mock_record)
+
+        response = await client.post(
+            "/api/auth/refresh",
+            cookies={"refresh_token": "valid-refresh-token"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "testuser"
+        assert data["message"] == "토큰이 갱신되었습니다."
+
+        # 새 쿠키 발급 확인
+        cookies = {c.name: c for c in response.cookies.jar}
+        assert "access_token" in cookies
+
+    async def test_refresh_no_token(self, client, mock_db):
+        """리프레시 토큰 없이 갱신 시도"""
+        response = await client.post("/api/auth/refresh")
+        assert response.status_code == 401
+        assert "리프레시 토큰이 없습니다" in response.json()["detail"]
+
+    async def test_refresh_expired_token(self, client, mock_db):
+        """만료된 리프레시 토큰"""
+        mock_db.refreshtoken.find_unique = AsyncMock(return_value=None)
+
+        response = await client.post(
+            "/api/auth/refresh",
+            cookies={"refresh_token": "expired-token"},
+        )
+        assert response.status_code == 401
+
+
+# ──────────────────────────────────────────────
+# 로그아웃 API 테스트
+# ──────────────────────────────────────────────
+
+
+class TestLogout:
+    """POST /api/auth/logout"""
+
+    async def test_logout_success(self, client, mock_db):
+        """정상 로그아웃 - 쿠키 삭제"""
+        access_token = create_access_token(subject="user-uuid-123")
+        user = MagicMock()
+        user.id = "user-uuid-123"
+        user.username = "testuser"
+        mock_db.user.find_unique = AsyncMock(return_value=user)
+
+        response = await client.post(
+            "/api/auth/logout",
+            cookies={
+                "access_token": access_token,
+                "refresh_token": "some-refresh-token",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["message"] == "로그아웃되었습니다."
+
+    async def test_logout_no_auth(self, client, mock_db):
+        """인증 없이 로그아웃 시도"""
+        response = await client.post("/api/auth/logout")
+        assert response.status_code == 401
+
+    async def test_logout_expired_access_token(self, client, mock_db):
+        """만료된 액세스 토큰으로 로그아웃 시도"""
+        expired = create_access_token(subject="user-uuid-123", expires_delta=timedelta(minutes=-1))
+        response = await client.post(
+            "/api/auth/logout",
+            cookies={"access_token": expired},
+        )
+        assert response.status_code == 401

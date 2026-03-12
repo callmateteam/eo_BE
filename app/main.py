@@ -21,9 +21,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
+    description="EO Backend API - 쿠키 기반 JWT 인증",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
+    swagger_ui_parameters={
+        "persistAuthorization": True,
+        "withCredentials": True,
+    },
 )
 
 app.add_middleware(

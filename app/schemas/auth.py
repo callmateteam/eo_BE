@@ -123,10 +123,9 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
     user_id: str
     username: str
+    message: str
 
 
 class ErrorDetail(BaseModel):
