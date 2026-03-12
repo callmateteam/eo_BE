@@ -15,7 +15,10 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = False  # 프로덕션에서는 True (HTTPS)
     COOKIE_DOMAIN: str | None = None
 
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
+    ALLOWED_ORIGINS: list[str] = [
+        "http://localhost:3000",
+        "https://eo-fe-eight.vercel.app",
+    ]
 
     # YouTube
     YOUTUBE_API_KEY: str = ""
