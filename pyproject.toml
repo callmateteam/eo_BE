@@ -18,6 +18,7 @@ ignore = ["UP017", "B008"]
 "app/core/security.py" = ["S105"]
 "app/schemas/auth.py" = ["S105"]
 "app/services/auth.py" = ["S110"]
+"prisma/seed.py" = ["E501", "T201"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

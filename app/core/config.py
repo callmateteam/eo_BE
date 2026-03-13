@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
 
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+
+    # Kling
+    KLING_ACCESS_KEY: str = ""
+    KLING_SECRET_KEY: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

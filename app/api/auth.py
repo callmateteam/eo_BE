@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from app.core.deps import get_current_user
@@ -12,8 +14,13 @@ from app.core.security import (
 from app.schemas.auth import (
     ErrorDetail,
     ErrorResponse,
+    GoogleLinkRequest,
+    GoogleLinkResponse,
+    GoogleLoginRequest,
+    GoogleLoginResponse,
     LoginRequest,
     LoginResponse,
+    MeResponse,
     SignupRequest,
     SignupResponse,
     UsernameValidateRequest,
@@ -25,11 +32,17 @@ from app.services.auth import (
     consume_verification_token,
     create_user,
     create_verification_token,
+    get_user_profile,
+    google_login_or_create,
+    link_google_account,
     revoke_refresh_token,
     save_refresh_token,
     validate_verification_token,
+    verify_google_id_token,
     verify_refresh_token,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -37,13 +50,22 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post(
     "/validate-username",
     response_model=UsernameValidateResponse,
+    summary="아이디 유효성 검사",
     responses={
-        400: {"model": ErrorResponse, "description": "유효성 검사 실패"},
+        400: {
+            "model": ErrorResponse,
+            "description": "유효성 검사 실패 (5자 미만, 20자 초과, 영문/숫자 외 문자)",
+        },
         409: {"model": ErrorResponse, "description": "이미 사용 중인 아이디"},
+        422: {"model": ErrorResponse, "description": "요청 파라미터 누락"},
     },
 )
 async def validate_username(request: UsernameValidateRequest):
-    """아이디 유효성 검사 및 중복 확인 API"""
+    """아이디 유효성 검사 및 중복 확인
+
+    - 아이디: 5~20자, 영문+숫자만, 영문 최소 1자 포함
+    - 사용 가능하면 verification_token 발급 (5분 유효)
+    """
     is_available = await check_username_available(request.username)
 
     if not is_available:
@@ -77,13 +99,23 @@ async def validate_username(request: UsernameValidateRequest):
     "/signup",
     response_model=SignupResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="회원가입",
     responses={
-        400: {"model": ErrorResponse, "description": "유효성 검사 실패"},
+        400: {
+            "model": ErrorResponse,
+            "description": "검증 토큰 만료/무효 또는 비밀번호 규칙 위반",
+        },
         409: {"model": ErrorResponse, "description": "이미 사용 중인 아이디"},
+        422: {"model": ErrorResponse, "description": "요청 파라미터 유효성 검사 실패"},
     },
 )
 async def signup(request: SignupRequest):
-    """회원가입 API - 아이디 검증 토큰 필수"""
+    """회원가입 - 아이디 검증 토큰 필수
+
+    필수: name(이름), username(아이디), password(비밀번호), verification_token
+    - 비밀번호: 8자 이상, 영문+숫자+특수문자 필수 포함
+    - verification_token: /api/auth/validate-username에서 발급 (5분 유효)
+    """
     if not validate_verification_token(request.verification_token, request.username):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -119,7 +151,7 @@ async def signup(request: SignupRequest):
             ).model_dump(),
         )
 
-    user = await create_user(request.username, request.password)
+    user = await create_user(request.name, request.username, request.password)
     consume_verification_token(request.verification_token)
 
     return SignupResponse(
@@ -166,6 +198,110 @@ async def login(request: LoginRequest, response: Response):
 
 
 @router.post(
+    "/google",
+    response_model=GoogleLoginResponse,
+    responses={
+        401: {
+            "model": ErrorResponse,
+            "description": "구글 토큰 검증 실패",
+        },
+    },
+)
+async def google_login(request: GoogleLoginRequest, response: Response):
+    """구글 로그인 API - id_token 검증 후 쿠키 발급
+
+    프론트에서 Google OAuth로 받은 id_token을 전달하면:
+    1. 토큰 검증 → 구글 유저 정보 추출
+    2. 기존 유저면 로그인, 없으면 자동 회원가입
+    3. 우리 JWT 쿠키 발급
+    """
+    try:
+        google_info = verify_google_id_token(request.id_token)
+    except ValueError:
+        logger.exception("구글 id_token 검증 실패")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ErrorResponse(
+                detail="구글 인증에 실패했습니다.",
+                errors=[
+                    ErrorDetail(
+                        field="id_token",
+                        message="구글 토큰이 유효하지 않거나 만료되었습니다.",
+                    )
+                ],
+            ).model_dump(),
+        ) from None
+
+    user = await google_login_or_create(google_info)
+
+    access_token = create_access_token(subject=user["id"])
+    refresh_token = await save_refresh_token(user["id"])
+    set_auth_cookies(response, access_token, refresh_token)
+
+    return GoogleLoginResponse(
+        user_id=user["id"],
+        username=user["username"],
+        email=user.get("email"),
+        is_new_user=user.get("is_new_user", False),
+        message="구글 로그인에 성공했습니다.",
+    )
+
+
+@router.post(
+    "/google/link",
+    response_model=GoogleLinkResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "인증 필요 또는 구글 토큰 검증 실패"},
+        409: {
+            "model": ErrorResponse,
+            "description": "이미 다른 계정에 연동된 구글 계정",
+        },
+    },
+)
+async def google_link(
+    request: GoogleLinkRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """기존 계정에 구글 연동 - 로그인된 상태에서 구글 계정 연결"""
+    try:
+        google_info = verify_google_id_token(request.id_token)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ErrorResponse(
+                detail="구글 인증에 실패했습니다.",
+                errors=[
+                    ErrorDetail(
+                        field="id_token",
+                        message="구글 토큰이 유효하지 않거나 만료되었습니다.",
+                    )
+                ],
+            ).model_dump(),
+        ) from None
+
+    try:
+        result = await link_google_account(current_user["id"], google_info)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=ErrorResponse(
+                detail=str(e),
+                errors=[
+                    ErrorDetail(
+                        field="id_token",
+                        message=str(e),
+                    )
+                ],
+            ).model_dump(),
+        ) from None
+
+    return GoogleLinkResponse(
+        email=result["email"],
+        message="구글 계정이 연동되었습니다.",
+    )
+
+
+@router.post(
     "/refresh",
     response_model=LoginResponse,
     responses={
@@ -202,7 +338,13 @@ async def refresh(request: Request, response: Response):
     )
 
 
-@router.post("/logout")
+@router.post(
+    "/logout",
+    summary="로그아웃",
+    responses={
+        401: {"model": ErrorResponse, "description": "인증 필요 (쿠키 없음/만료)"},
+    },
+)
 async def logout(
     request: Request,
     response: Response,
@@ -215,3 +357,22 @@ async def logout(
 
     clear_auth_cookies(response)
     return {"message": "로그아웃되었습니다."}
+
+
+@router.get(
+    "/me",
+    response_model=MeResponse,
+    summary="내 정보 조회",
+    responses={
+        401: {"model": ErrorResponse, "description": "인증 필요 (쿠키 없음/만료)"},
+    },
+)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """현재 로그인된 사용자의 정보 및 소셜 연동 상태 조회"""
+    user = await get_user_profile(current_user["id"])
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+    return user

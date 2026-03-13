@@ -10,11 +10,20 @@ generator client {
 }
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
-  username     String    @unique @db.VarChar(50)
-  password     String    @db.VarChar(255)
-  createdAt    DateTime  @default(dbgenerated("now() AT TIME ZONE 'Asia/Seoul'")) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  id                 String    @id @default(uuid()) @db.Uuid
+  name               String    @default("") @db.VarChar(30)
+  username           String    @unique @db.VarChar(50)
+  password           String    @default("") @db.VarChar(255)
+  email              String?   @unique @db.VarChar(255)
+  profileImage       String?   @map("profile_image") @db.VarChar(500)
+  googleId           String?   @unique @map("google_id") @db.VarChar(255)
+  googleRefreshToken String?   @map("google_refresh_token") @db.VarChar(500)
+  tiktokId           String?   @unique @map("tiktok_id") @db.VarChar(255)
+  tiktokAccessToken  String?   @map("tiktok_access_token") @db.VarChar(500)
+  instagramId        String?   @unique @map("instagram_id") @db.VarChar(255)
+  instagramToken     String?   @map("instagram_token") @db.VarChar(500)
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
   projects      Project[]
   refreshTokens RefreshToken[]
@@ -22,18 +31,64 @@ model User {
   @@map("users")
 }
 
-model Project {
-  id             String   @id @default(uuid()) @db.Uuid
-  title          String   @db.VarChar(100)
-  characterName  String   @map("character_name") @db.VarChar(50)
-  characterImage String   @map("character_image") @db.VarChar(500)
-  userId         String   @map("user_id") @db.Uuid
-  createdAt      DateTime @default(dbgenerated("now() AT TIME ZONE 'Asia/Seoul'")) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+enum CharacterCategory {
+  MEME
+  ACTION
+  CUTE
+  BEAUTY
+}
 
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+model Character {
+  id             String            @id @default(uuid()) @db.Uuid
+  name           String            @db.VarChar(50)
+  nameEn         String            @map("name_en") @db.VarChar(100)
+  series         String            @db.VarChar(100)
+  category       CharacterCategory
+  imageUrl       String            @map("image_url") @db.VarChar(500)
+  thumbnailUrl   String            @map("thumbnail_url") @db.VarChar(500)
+  description    String            @db.VarChar(500)
+  promptFeatures String            @map("prompt_features") @db.VarChar(1000)
+  heightCm       Int               @default(170) @map("height_cm")
+  bodyBuild      String            @map("body_build") @db.VarChar(100)
+  faceFeatures   String            @map("face_features") @db.VarChar(500)
+  costumeDesc    String            @map("costume_desc") @db.VarChar(500)
+  distinctMarks  String            @map("distinct_marks") @db.VarChar(500)
+  veoPrompt      String            @map("veo_prompt") @db.VarChar(2000)
+  bodyType       String            @map("body_type") @db.VarChar(50)
+  primaryColor   String            @map("primary_color") @db.VarChar(30)
+  sortOrder      Int               @default(0) @map("sort_order")
+  isActive       Boolean           @default(true) @map("is_active")
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  projects       Project[]
+
+  @@index([category])
+  @@index([isActive])
+  @@map("characters")
+}
+
+enum ProjectStatus {
+  CREATED
+  SCRIPT_WRITTEN
+  VOICE_GENERATED
+  VIDEO_GENERATED
+  COMPLETED
+}
+
+model Project {
+  id             String        @id @default(uuid()) @db.Uuid
+  title          String        @db.VarChar(100)
+  characterId    String        @map("character_id") @db.Uuid
+  status         ProjectStatus @default(CREATED)
+  userId         String        @map("user_id") @db.Uuid
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character      Character     @relation(fields: [characterId], references: [id])
 
   @@index([userId])
+  @@index([characterId])
   @@map("projects")
 }
 
@@ -42,7 +97,7 @@ model RefreshToken {
   token     String   @unique @db.VarChar(255)
   userId    String   @map("user_id") @db.Uuid
   expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(dbgenerated("now() AT TIME ZONE 'Asia/Seoul'")) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

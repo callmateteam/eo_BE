@@ -16,8 +16,8 @@ class UsernameValidateRequest(BaseModel):
         if not v:
             raise ValueError("아이디를 입력해주세요.")
 
-        if len(v) < 4:
-            raise ValueError("아이디는 최소 4자 이상이어야 합니다.")
+        if len(v) < 5:
+            raise ValueError("아이디는 최소 5자 이상이어야 합니다.")
 
         if len(v) > 20:
             raise ValueError("아이디는 최대 20자까지 가능합니다.")
@@ -41,9 +41,20 @@ class UsernameValidateResponse(BaseModel):
 
 
 class SignupRequest(BaseModel):
+    name: str
     username: str
     password: str
     verification_token: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("이름을 입력해주세요.")
+        if len(v) > 30:
+            raise ValueError("이름은 최대 30자까지 가능합니다.")
+        return v
 
     @field_validator("username")
     @classmethod
@@ -53,8 +64,8 @@ class SignupRequest(BaseModel):
         if not v:
             raise ValueError("아이디를 입력해주세요.")
 
-        if len(v) < 4:
-            raise ValueError("아이디는 최소 4자 이상이어야 합니다.")
+        if len(v) < 5:
+            raise ValueError("아이디는 최소 5자 이상이어야 합니다.")
 
         if len(v) > 20:
             raise ValueError("아이디는 최대 20자까지 가능합니다.")
@@ -136,3 +147,52 @@ class ErrorDetail(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
     errors: list[ErrorDetail] = []
+
+
+class GoogleLoginRequest(BaseModel):
+    """구글 로그인 요청 (프론트에서 받은 id_token)"""
+
+    id_token: str
+
+
+class GoogleLoginResponse(BaseModel):
+    """구글 로그인 응답"""
+
+    user_id: str
+    username: str
+    email: str | None = None
+    is_new_user: bool = False
+    message: str
+
+
+class GoogleLinkRequest(BaseModel):
+    """기존 계정에 구글 연동 요청"""
+
+    id_token: str
+
+
+class GoogleLinkResponse(BaseModel):
+    """구글 연동 응답"""
+
+    email: str
+    message: str
+
+
+class SocialConnections(BaseModel):
+    """소셜 연동 상태"""
+
+    youtube: bool = False
+    tiktok: bool = False
+    instagram: bool = False
+
+
+class MeResponse(BaseModel):
+    """내 정보 응답"""
+
+    id: str
+    name: str
+    username: str
+    email: str | None = None
+    profile_image: str | None = None
+    social: SocialConnections
+    created_at: str

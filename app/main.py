@@ -18,10 +18,40 @@ async def lifespan(app: FastAPI):
     await disconnect_db()
 
 
+SWAGGER_DESCRIPTION = """
+## EO Backend API
+
+AI 기반 숏폼 영상 생성 플랫폼 백엔드 API
+
+### 인증 방식
+- **쿠키 기반 JWT**: 로그인 시 `access_token`(30분) + `refresh_token`(7일) 쿠키 자동 설정
+- **구글 OAuth**: Google id_token 검증 후 동일한 쿠키 발급
+
+### 에러 응답 형식
+```json
+{
+  "detail": "에러 요약 메시지",
+  "errors": [
+    {"field": "필드명 또는 null", "message": "상세 에러 메시지"}
+  ]
+}
+```
+
+### 공통 에러 코드
+| 코드 | 설명 |
+|------|------|
+| 400 | 유효성 검사 실패 (잘못된 입력) |
+| 401 | 인증 필요 (쿠키 없음/만료/무효) |
+| 404 | 리소스를 찾을 수 없음 |
+| 409 | 충돌 (중복 아이디, 이미 연동된 계정 등) |
+| 422 | 요청 파라미터 형식 오류 |
+| 500 | 서버 내부 오류 |
+"""
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="EO Backend API - 쿠키 기반 JWT 인증",
+    description=SWAGGER_DESCRIPTION,
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,

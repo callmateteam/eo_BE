@@ -12,13 +12,37 @@ from app.core.timezone import KST
 KST_NOW = datetime.now(KST)
 
 
+STATUSES = ["CREATED", "SCRIPT_WRITTEN", "VOICE_GENERATED", "VIDEO_GENERATED", "COMPLETED"]
+
+
+def _make_character(idx: int = 1):
+    """테스트용 캐릭터 Mock 객체 생성"""
+    c = MagicMock()
+    c.id = f"char-uuid-{idx}"
+    c.name = f"캐릭터{idx}"
+    c.nameEn = f"Character{idx}"
+    c.series = f"작품{idx}"
+    c.category = "MEME"
+    c.imageUrl = f"https://example.com/char{idx}.png"
+    c.thumbnailUrl = f"https://example.com/char{idx}_thumb.png"
+    c.description = f"캐릭터{idx} 설명"
+    c.promptFeatures = f"character{idx} features"
+    c.bodyType = "소년"
+    c.primaryColor = "red"
+    c.sortOrder = idx
+    c.isActive = True
+    return c
+
+
 def _make_project(idx: int = 1):
     """테스트용 프로젝트 Mock 객체 생성"""
+    char = _make_character(idx)
     p = MagicMock()
     p.id = f"project-uuid-{idx}"
     p.title = f"테스트 프로젝트 {idx}"
-    p.characterName = f"캐릭터{idx}"
-    p.characterImage = f"https://example.com/char{idx}.png"
+    p.characterId = char.id
+    p.character = char
+    p.status = STATUSES[(idx - 1) % len(STATUSES)]
     p.createdAt = KST_NOW - timedelta(days=idx)
     return p
 
@@ -116,9 +140,16 @@ class TestDashboard:
         project = resp.json()["recent_projects"][0]
         assert "id" in project
         assert "title" in project
+        assert "character_id" in project
         assert "character_name" in project
         assert "character_image" in project
+        assert "status" in project
+        assert "status_label" in project
+        assert "progress" in project
         assert "created_at" in project
+        assert project["status"] == "CREATED"
+        assert project["status_label"] == "프로젝트 생성"
+        assert project["progress"] == 0
 
     @pytest.mark.asyncio
     async def test_dashboard_trend_fields(self, authed_client, auth_cookies):
@@ -177,6 +208,22 @@ class TestDashboard:
 
         assert resp.status_code == 200
         assert resp.json()["recent_projects"] == []
+
+    @pytest.mark.asyncio
+    async def test_dashboard_project_progress_mapping(self, authed_client, auth_cookies):
+        """각 상태별 진행률이 올바르게 매핑되는지 확인"""
+        with patch(
+            "app.api.dashboard.fetch_trending_keywords",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            resp = await authed_client.get("/api/dashboard", cookies=auth_cookies)
+
+        projects = resp.json()["recent_projects"]
+        # idx=1 → CREATED(0%), idx=2 → SCRIPT_WRITTEN(25%), idx=3 → VOICE_GENERATED(50%)
+        assert projects[0]["progress"] == 0
+        assert projects[1]["progress"] == 25
+        assert projects[2]["progress"] == 50
 
     @pytest.mark.asyncio
     async def test_dashboard_trend_api_failure(self, authed_client, auth_cookies):
