@@ -58,9 +58,6 @@ jobs:
               -p 8000:8000 \
               eo-api
 
-            # Prisma DB 마이그레이션
-            docker exec eo-api python -m prisma db push --skip-generate
-
             # 헬스체크
             sleep 3
             curl -f http://localhost:8000/docs || echo "WARNING: Health check failed"
