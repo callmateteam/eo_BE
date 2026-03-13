@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     VERSION: str = "0.1.0"
     DEBUG: bool = False
 
-    DATABASE_URL: str = "postgresql+asyncpg://localhost:5432/eo"
+    DATABASE_URL: str = "postgresql://localhost:5432/eo"
     SECRET_KEY: str = "change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -31,10 +31,6 @@ class Settings(BaseSettings):
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
-
-    # Kling
-    KLING_ACCESS_KEY: str = ""
-    KLING_SECRET_KEY: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

@@ -48,7 +48,7 @@ async def generate_video(
     )
     full_prompt = f"{character['veo_prompt']}, {req.prompt}, {cinematic}"
 
-    generator = get_generator(req.provider.value)
+    generator = get_generator()
 
     task_id = await generator.generate(
         prompt=full_prompt,
@@ -60,13 +60,12 @@ async def generate_video(
 
     return VideoTaskResponse(
         task_id=task_id,
-        provider=req.provider,
         status="submitted",
     )
 
 
 @router.get(
-    "/status/{provider}/{task_id}",
+    "/status/{task_id}",
     response_model=VideoStatusResponse,
     responses={
         401: {"model": ErrorResponse, "description": "인증 필요 (쿠키 없음/만료)"},
@@ -75,21 +74,19 @@ async def generate_video(
     },
 )
 async def get_video_status(
-    provider: str,
     task_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> VideoStatusResponse:
     """영상 생성 상태 조회
 
-    provider와 task_id로 영상 생성 작업의 현재 상태를 조회합니다.
+    task_id로 영상 생성 작업의 현재 상태를 조회합니다.
     status: submitted → processing → completed / failed
     """
-    generator = get_generator(provider)
+    generator = get_generator()
     result = await generator.get_status(task_id)
 
     return VideoStatusResponse(
         task_id=task_id,
-        provider=provider,
         status=result["status"],
         video_url=result.get("video_url"),
         duration=result.get("duration"),
