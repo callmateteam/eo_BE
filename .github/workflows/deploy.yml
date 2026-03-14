@@ -31,21 +31,19 @@ jobs:
             git pull origin main
 
             # .env 생성 (GitHub Secrets 기반)
-            cat > .env <<ENVEOF
-            DATABASE_URL=${{ secrets.DATABASE_URL }}
-            SECRET_KEY=${{ secrets.SECRET_KEY }}
-            DEBUG=${{ secrets.DEBUG }}
-            YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}
-            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-            AWS_REGION=${{ secrets.AWS_REGION }}
-            AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
-            AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            S3_BUCKET=${{ secrets.S3_BUCKET }}
-            ALLOWED_ORIGINS='${{ secrets.ALLOWED_ORIGINS }}'
-            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
-            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
-            COOKIE_SECURE=${{ secrets.COOKIE_SECURE }}
-            ENVEOF
+            echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" > .env
+            echo "SECRET_KEY=${{ secrets.SECRET_KEY }}" >> .env
+            echo "DEBUG=${{ secrets.DEBUG }}" >> .env
+            echo "YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}" >> .env
+            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+            echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> .env
+            echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env
+            echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env
+            echo "S3_BUCKET=${{ secrets.S3_BUCKET }}" >> .env
+            echo 'ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS }}' >> .env
+            echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
+            echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env
+            echo "COOKIE_SECURE=${{ secrets.COOKIE_SECURE }}" >> .env
 
             # 빌드 전 디스크 정리
             docker builder prune -af
