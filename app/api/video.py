@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.deps import get_current_user
+from app.core.trend_manager import trend_manager
 from app.schemas.auth import ErrorResponse
 from app.schemas.video import (
     VideoGenerateRequest,
@@ -12,6 +13,8 @@ from app.schemas.video import (
     VideoTaskResponse,
 )
 from app.services.character import get_character_by_id
+from app.services.creation_trend import get_creation_trends
+from app.services.trending import fetch_trending_keywords
 from app.services.video import get_generator
 
 router = APIRouter(prefix="/api/video", tags=["video"])
@@ -56,6 +59,16 @@ async def generate_video(
         duration=req.duration,
         mode=req.mode.value,
         aspect_ratio=req.aspect_ratio.value,
+    )
+
+    # 영상 생성 시 트렌드 실시간 broadcast
+    youtube_raw = await fetch_trending_keywords(max_results=10)
+    creation_raw = await get_creation_trends(limit=10)
+    await trend_manager.broadcast(
+        {
+            "youtube": youtube_raw,
+            "creation": creation_raw,
+        }
     )
 
     return VideoTaskResponse(

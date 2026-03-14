@@ -6,15 +6,19 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.api import router as api_router
+from app.api.ws import router as ws_router
 from app.core.config import settings
 from app.core.database import connect_db, disconnect_db
+from app.core.trend_manager import trend_manager
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 DB 연결 관리"""
     await connect_db()
+    trend_manager.start()
     yield
+    trend_manager.stop()
     await disconnect_db()
 
 
@@ -88,6 +92,7 @@ async def validation_error_handler(request: Request, exc: ValidationError):
 
 
 app.include_router(api_router, prefix="/api")
+app.include_router(ws_router)
 
 
 @app.get("/health")

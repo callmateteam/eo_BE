@@ -78,6 +78,7 @@ enum ProjectStatus {
 model Project {
   id             String        @id @default(uuid()) @db.Uuid
   title          String        @db.VarChar(100)
+  keyword        String        @default("") @db.VarChar(100)
   characterId    String        @map("character_id") @db.Uuid
   status         ProjectStatus @default(CREATED)
   userId         String        @map("user_id") @db.Uuid
@@ -89,6 +90,7 @@ model Project {
 
   @@index([userId])
   @@index([characterId])
+  @@index([keyword])
   @@map("projects")
 }
 

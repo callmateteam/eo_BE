@@ -49,11 +49,19 @@ class ProjectItem(BaseModel):
 
 
 class TrendKeyword(BaseModel):
-    """트렌드 키워드 아이템"""
+    """유튜브 트렌드 키워드 아이템"""
 
     rank: int
     keyword: str
     traffic: str
+
+
+class CreationTrendItem(BaseModel):
+    """플랫폼 내 제작 트렌드 아이템"""
+
+    rank: int
+    keyword: str
+    count: int
 
 
 class RecentCharacterItem(BaseModel):
@@ -75,3 +83,4 @@ class DashboardResponse(BaseModel):
     recent_projects: list[ProjectItem]
     recent_characters: list[RecentCharacterItem] | None = None
     trending_keywords: list[TrendKeyword]
+    creation_trends: list[CreationTrendItem]
