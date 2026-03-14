@@ -13,13 +13,13 @@ async def get_creation_trends(limit: int = 10) -> list[dict]:
 
     Prisma ORM은 GROUP BY를 직접 지원하지 않으므로 raw query 사용.
     """
-    since = now_kst() - timedelta(hours=24)
+    since = (now_kst() - timedelta(hours=24)).isoformat()
 
     rows = await db.query_raw(
         """
         SELECT keyword, COUNT(DISTINCT user_id) as user_count
         FROM projects
-        WHERE keyword != '' AND created_at >= $1
+        WHERE keyword != '' AND created_at >= CAST($1 AS timestamp)
         GROUP BY keyword
         ORDER BY user_count DESC, keyword ASC
         LIMIT $2
