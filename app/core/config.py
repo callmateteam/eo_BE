@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: list[str] = [
         "http://localhost:3000",
         "https://eo-fe-eight.vercel.app",
+        "https://eo-api.intalkpartners.com",
     ]
 
     # YouTube
