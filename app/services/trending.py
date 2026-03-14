@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
-from xml.etree import ElementTree
 
 import httpx
+from defusedxml import ElementTree
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ async def _fetch_google_trends() -> list[dict]:
         resp = await client.get(GOOGLE_TRENDS_RSS)
         resp.raise_for_status()
 
-    root = ElementTree.fromstring(resp.text)  # noqa: S314
+    root = ElementTree.fromstring(resp.text)
     items = root.findall(".//item")
 
     ht_ns = "https://trends.google.com/trending/rss"

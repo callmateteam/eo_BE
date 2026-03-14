@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    # OpenAI (GPT-4o Vision - 커스텀 캐릭터 분석)
+    OPENAI_API_KEY: str = ""
+
+    # S3
+    S3_BUCKET: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

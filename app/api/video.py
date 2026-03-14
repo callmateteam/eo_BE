@@ -44,12 +44,17 @@ async def generate_video(
     if not character:
         raise HTTPException(status_code=404, detail="캐릭터를 찾을 수 없습니다")
 
-    # 프롬프트 조합: 캐릭터 veo_prompt + 사용자 prompt + 시네마틱 키워드
-    cinematic = (
-        "cinematic lighting, film grain, shallow depth of field, "
-        "shot on 35mm film, natural color grading"
+    # 스타일: 동물/로봇 → CGI, 나머지 → live action
+    cgi_types = {"동물", "대형 동물", "로봇"}
+    style = (
+        "anime-inspired CGI style"
+        if character["body_type"] in cgi_types
+        else "anime-inspired live action style"
     )
-    full_prompt = f"{character['veo_prompt']}, {req.prompt}, {cinematic}"
+    ratio_map = {"9:16": "9:16 vertical", "16:9": "16:9 horizontal", "1:1": "1:1 square"}
+    ratio = ratio_map.get(req.aspect_ratio.value, req.aspect_ratio.value)
+    suffix = f"cinematic lighting, shallow depth of field, {style}, {ratio}"
+    full_prompt = f"{character['veo_prompt']}, {req.prompt}, {suffix}"
 
     generator = get_generator()
 

@@ -65,15 +65,16 @@ class CreationTrendItem(BaseModel):
 
 
 class RecentCharacterItem(BaseModel):
-    """최근 사용한 캐릭터 아이템"""
+    """최근 사용한 캐릭터 아이템 (프리셋/커스텀 통합)"""
 
     id: str
     name: str
-    name_en: str
-    series: str
+    name_en: str = ""
+    series: str = ""
     category: str
     image_url: str
     thumbnail_url: str
+    type: str = "preset"  # "preset" | "custom"
     last_used_at: str
 
 

@@ -25,8 +25,10 @@ model User {
   createdAt          DateTime  @default(now()) @map("created_at")
   updatedAt          DateTime  @updatedAt @map("updated_at")
 
-  projects      Project[]
-  refreshTokens RefreshToken[]
+  projects         Project[]
+  refreshTokens    RefreshToken[]
+  customCharacters CustomCharacter[]
+  storyboards      Storyboard[]
 
   @@map("users")
 }
@@ -61,6 +63,7 @@ model Character {
   createdAt      DateTime          @default(now()) @map("created_at")
 
   projects       Project[]
+  storyboards    Storyboard[]
 
   @@index([category])
   @@index([isActive])
@@ -92,6 +95,92 @@ model Project {
   @@index([characterId])
   @@index([keyword])
   @@map("projects")
+}
+
+enum CharacterStyle {
+  REALISTIC
+  ANIME
+  CARTOON_3D
+  ILLUSTRATION_2D
+  CLAY
+  WATERCOLOR
+}
+
+enum CustomCharacterStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model CustomCharacter {
+  id          String                @id @default(uuid()) @db.Uuid
+  name        String                @db.VarChar(50)
+  description String                @db.VarChar(500)
+  style       CharacterStyle
+  imageUrl1   String                @map("image_url_1") @db.VarChar(500)
+  imageUrl2   String                @map("image_url_2") @db.VarChar(500)
+  veoPrompt   String?               @map("veo_prompt") @db.VarChar(2000)
+  status      CustomCharacterStatus @default(PROCESSING)
+  errorMsg    String?               @map("error_msg") @db.VarChar(500)
+  userId      String                @map("user_id") @db.Uuid
+  createdAt   DateTime              @default(now()) @map("created_at")
+
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  storyboards Storyboard[]
+
+  @@index([userId])
+  @@map("custom_characters")
+}
+
+enum StoryboardStatus {
+  GENERATING
+  READY
+  FAILED
+}
+
+model Storyboard {
+  id                 String           @id @default(uuid()) @db.Uuid
+  idea               String           @db.VarChar(2000)
+  characterId        String?          @map("character_id") @db.Uuid
+  customCharacterId  String?          @map("custom_character_id") @db.Uuid
+  status             StoryboardStatus @default(GENERATING)
+  errorMsg           String?          @map("error_msg") @db.VarChar(500)
+  userId             String           @map("user_id") @db.Uuid
+  createdAt          DateTime         @default(now()) @map("created_at")
+
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character          Character?       @relation(fields: [characterId], references: [id])
+  customCharacter    CustomCharacter? @relation(fields: [customCharacterId], references: [id])
+  scenes             StoryboardScene[]
+
+  @@index([userId])
+  @@map("storyboards")
+}
+
+enum SceneImageStatus {
+  PENDING
+  GENERATING
+  COMPLETED
+  FAILED
+  STALE
+}
+
+model StoryboardScene {
+  id             String           @id @default(uuid()) @db.Uuid
+  storyboardId   String           @map("storyboard_id") @db.Uuid
+  sceneOrder     Int              @map("scene_order")
+  title          String           @db.VarChar(100)
+  content        String           @db.VarChar(2000)
+  imagePrompt    String           @map("image_prompt") @db.VarChar(2000)
+  imageUrl       String?          @map("image_url") @db.VarChar(500)
+  imageStatus    SceneImageStatus @default(PENDING) @map("image_status")
+  duration       Float            @default(5.0)
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  storyboard     Storyboard       @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
+
+  @@index([storyboardId])
+  @@map("storyboard_scenes")
 }
 
 model RefreshToken {
