@@ -44,6 +44,10 @@ jobs:
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
             ENVEOF
 
+            # 빌드 전 디스크 정리
+            docker builder prune -af
+            docker image prune -af
+
             # Docker 빌드 및 재시작
             docker build -t eo-api .
             docker stop eo-api || true
