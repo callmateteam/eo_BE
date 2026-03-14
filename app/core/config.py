@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: list[str] = [
         "http://localhost:3000",
         "https://eo-fe-eight.vercel.app",
-        "https://eo-api.intalkpartners.com",
+        "https://d2phq2ghco7tx0.cloudfront.net",
     ]
 
     # YouTube

@@ -31,7 +31,7 @@ jobs:
             git pull origin main
 
             # .env 생성 (GitHub Secrets 기반)
-            cat > .env << 'ENVEOF'
+            cat > .env <<ENVEOF
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             SECRET_KEY=${{ secrets.SECRET_KEY }}
             DEBUG=${{ secrets.DEBUG }}
@@ -41,7 +41,7 @@ jobs:
             AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
             AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
             S3_BUCKET=${{ secrets.S3_BUCKET }}
-            ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS }}
+            ALLOWED_ORIGINS='${{ secrets.ALLOWED_ORIGINS }}'
             GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
             COOKIE_SECURE=${{ secrets.COOKIE_SECURE }}
