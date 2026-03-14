@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.core.deps import get_current_user
+from app.schemas.auth import ErrorResponse
 from app.schemas.dashboard import (
     CreationTrendItem,
     DashboardResponse,
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
     response_model=DashboardResponse,
     summary="대시보드 조회",
     responses={
-        401: {"description": "인증 필요 (쿠키 없음/만료)"},
+        401: {"model": ErrorResponse, "description": "인증 필요 (쿠키 없음/만료)"},
     },
 )
 async def get_dashboard(current_user: dict = Depends(get_current_user)):
