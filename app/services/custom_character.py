@@ -211,6 +211,56 @@ async def get_custom_character_by_id(character_id: str, user_id: str) -> dict | 
     return _to_dict(c)
 
 
+async def create_custom_character_record(
+    name: str,
+    description: str,
+    style: str,
+    voice_id: str,
+    user_id: str,
+) -> dict:
+    """DB에 PROCESSING 상태로 커스텀 캐릭터 레코드 생성"""
+    record = await db.customcharacter.create(
+        data={
+            "name": name,
+            "description": description,
+            "style": style,
+            "voiceId": voice_id,
+            "imageUrl1": "",
+            "imageUrl2": "",
+            "userId": user_id,
+        }
+    )
+    return {"id": record.id}
+
+
+async def delete_custom_character(character_id: str, user_id: str) -> None:
+    """커스텀 캐릭터 삭제 (소유권 확인 + 스토리보드 연결 확인)"""
+    record = await db.customcharacter.find_first(
+        where={"id": character_id, "userId": user_id},
+    )
+    if not record:
+        raise ValueError("캐릭터를 찾을 수 없습니다")
+
+    linked = await db.storyboard.count(where={"customCharacterId": character_id})
+    if linked > 0:
+        raise ValueError("이 캐릭터를 사용하는 콘티가 있어 삭제할 수 없습니다")
+
+    await db.customcharacter.delete(where={"id": character_id})
+
+
+async def get_custom_character_status(character_id: str, user_id: str) -> dict | None:
+    """WS용 커스텀 캐릭터 상태 조회"""
+    record = await db.customcharacter.find_first(
+        where={"id": character_id, "userId": user_id},
+    )
+    if not record:
+        return None
+    return {
+        "id": record.id,
+        "status": record.status,
+    }
+
+
 def _to_dict(c: object) -> dict:
     """커스텀 캐릭터 모델 → dict 변환"""
     from app.schemas.custom_character import STYLE_LABEL

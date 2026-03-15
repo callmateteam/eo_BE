@@ -4,7 +4,7 @@
       "Bash(python -m pytest*)",
       "Bash(python -m ruff*)",
       "Bash(python -m bandit*)",
-      "Bash(source .venv/bin/activate*)",
+      "Bash(source .venv/Scripts/activate*)",
       "Bash(git status*)",
       "Bash(git diff*)",
       "Bash(git log*)",
@@ -39,12 +39,12 @@
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
-        "command": "cd /Users/intalk/Desktop/개인/eo/be && source .venv/bin/activate 2>/dev/null && python -m ruff check --select E,F --quiet $CLAUDE_FILE_PATH 2>/dev/null || true"
+        "command": "cd /c/Users/somem/Desktop/해커톤/eo_BE && source .venv/Scripts/activate 2>/dev/null && python -m ruff check --select E,F --quiet $CLAUDE_FILE_PATH 2>/dev/null || true"
       }
     ],
     "PreCommit": [
       {
-        "command": "cd /Users/intalk/Desktop/개인/eo/be && source .venv/bin/activate && python -m ruff check . && python -m pytest -q 2>/dev/null"
+        "command": "cd /c/Users/somem/Desktop/해커톤/eo_BE && source .venv/Scripts/activate && python -m ruff check . && python -m pytest -q 2>/dev/null"
       }
     ]
   }

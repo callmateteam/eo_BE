@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.database import db
 from app.core.deps import get_current_user
 from app.schemas.auth import ErrorResponse
 from app.schemas.project import (
@@ -14,6 +13,18 @@ from app.schemas.project import (
     ProjectListItem,
     ProjectListResponse,
     project_to_item,
+)
+from app.services.project import (
+    create_project as svc_create_project,
+)
+from app.services.project import (
+    delete_project as svc_delete_project,
+)
+from app.services.project import (
+    get_project as svc_get_project,
+)
+from app.services.project import (
+    list_projects as svc_list_projects,
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -34,20 +45,17 @@ async def create_project(
     current_user: dict = Depends(get_current_user),
 ) -> ProjectCreateResponse:
     """새 프로젝트 생성"""
-    # 캐릭터 존재 확인
-    char = await db.character.find_unique(where={"id": req.character_id})
-    if not char:
-        raise HTTPException(status_code=400, detail="캐릭터를 찾을 수 없습니다")
+    try:
+        result = await svc_create_project(
+            title=req.title,
+            keyword=req.keyword,
+            character_id=req.character_id,
+            user_id=current_user["id"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
-    record = await db.project.create(
-        data={
-            "title": req.title,
-            "keyword": req.keyword,
-            "characterId": req.character_id,
-            "userId": current_user["id"],
-        }
-    )
-    return ProjectCreateResponse(id=record.id, title=record.title)
+    return ProjectCreateResponse(id=result["id"], title=result["title"])
 
 
 @router.get(
@@ -62,12 +70,7 @@ async def list_projects(
     current_user: dict = Depends(get_current_user),
 ) -> ProjectListResponse:
     """내 프로젝트 전체 목록 (최신순, 진행중 포함)"""
-    records = await db.project.find_many(
-        where={"userId": current_user["id"]},
-        order={"createdAt": "desc"},
-        take=100,
-        include={"character": True},
-    )
+    records = await svc_list_projects(user_id=current_user["id"])
     items = [ProjectListItem(**project_to_item(r)) for r in records]
     return ProjectListResponse(projects=items, total=len(items))
 
@@ -86,9 +89,8 @@ async def get_project(
     current_user: dict = Depends(get_current_user),
 ) -> ProjectDetailResponse:
     """프로젝트 상세 조회 (본인 소유만)"""
-    record = await db.project.find_first(
-        where={"id": project_id, "userId": current_user["id"]},
-        include={"character": True},
+    record = await svc_get_project(
+        project_id=project_id, user_id=current_user["id"]
     )
     if not record:
         raise HTTPException(
@@ -111,11 +113,10 @@ async def delete_project(
     current_user: dict = Depends(get_current_user),
 ) -> None:
     """프로젝트 삭제 (본인 소유만)"""
-    record = await db.project.find_first(
-        where={"id": project_id, "userId": current_user["id"]},
+    deleted = await svc_delete_project(
+        project_id=project_id, user_id=current_user["id"]
     )
-    if not record:
+    if not deleted:
         raise HTTPException(
             status_code=404, detail="프로젝트를 찾을 수 없습니다"
         )
-    await db.project.delete(where={"id": project_id})

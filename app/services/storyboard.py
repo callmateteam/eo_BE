@@ -560,3 +560,247 @@ async def regenerate_scene_image_task(
             logger.exception("FAILED 상태 업데이트 실패: %s", scene_id)
         if progress_callback:
             await progress_callback(-1, "이미지 생성에 실패했습니다")
+
+
+# ── API 레이어에서 호출하는 DB 조회/수정 함수 ──
+
+
+async def count_generating_storyboards(user_id: str) -> int:
+    """유저의 GENERATING 상태 콘티 개수를 반환한다."""
+    return await db.storyboard.count(
+        where={"userId": user_id, "status": "GENERATING"},
+    )
+
+
+async def create_storyboard_record(
+    idea: str,
+    character_id: str | None,
+    custom_character_id: str | None,
+    user_id: str,
+) -> dict:
+    """DB에 GENERATING 상태 콘티를 생성하고 ``{"id": ...}`` 를 반환한다."""
+    record = await db.storyboard.create(
+        data={
+            "idea": idea,
+            "characterId": character_id,
+            "customCharacterId": custom_character_id,
+            "userId": user_id,
+        }
+    )
+    return {"id": record.id}
+
+
+async def list_storyboards(user_id: str) -> list:
+    """유저의 콘티 목록을 반환한다 (scenes 포함, createdAt 내림차순, 최대 50개)."""
+    return await db.storyboard.find_many(
+        where={"userId": user_id},
+        order={"createdAt": "desc"},
+        take=50,
+        include={"scenes": True},
+    )
+
+
+async def get_storyboard_detail(
+    storyboard_id: str,
+    user_id: str,
+) -> object | None:
+    """콘티 상세 조회 (scenes 포함). 없거나 소유권 불일치 시 None."""
+    return await db.storyboard.find_first(
+        where={"id": storyboard_id, "userId": user_id},
+        include={"scenes": True},
+    )
+
+
+async def update_scene(
+    storyboard_id: str,
+    scene_id: str,
+    user_id: str,
+    *,
+    title: str | None = None,
+    content: str | None = None,
+) -> object:
+    """장면 제목/내용 수정. content 변경 시 imageStatus → STALE.
+
+    소유권 불일치·장면 없음·수정 내용 없음 시 ``ValueError`` 를 발생시킨다.
+    """
+    sb = await db.storyboard.find_first(
+        where={"id": storyboard_id, "userId": user_id},
+    )
+    if not sb:
+        raise ValueError("콘티를 찾을 수 없습니다")
+
+    scene = await db.storyboardscene.find_first(
+        where={"id": scene_id, "storyboardId": storyboard_id},
+    )
+    if not scene:
+        raise ValueError("장면을 찾을 수 없습니다")
+
+    update_data: dict = {}
+    if title is not None:
+        update_data["title"] = title
+    if content is not None:
+        update_data["content"] = content
+        if scene.imageStatus == "COMPLETED":
+            update_data["imageStatus"] = "STALE"
+
+    if not update_data:
+        raise ValueError("수정할 내용이 없습니다")
+
+    return await db.storyboardscene.update(
+        where={"id": scene_id},
+        data=update_data,
+    )
+
+
+async def get_scene_for_regenerate(
+    storyboard_id: str,
+    scene_id: str,
+    user_id: str,
+) -> object:
+    """이미지 재생성 전 장면 조회 + 소유권 확인 + GENERATING 중복 방어.
+
+    실패 시 ``ValueError`` 를 발생시킨다.
+    """
+    sb = await db.storyboard.find_first(
+        where={"id": storyboard_id, "userId": user_id},
+    )
+    if not sb:
+        raise ValueError("콘티를 찾을 수 없습니다")
+
+    scene = await db.storyboardscene.find_first(
+        where={"id": scene_id, "storyboardId": storyboard_id},
+    )
+    if not scene:
+        raise ValueError("장면을 찾을 수 없습니다")
+
+    if scene.imageStatus == "GENERATING":
+        raise ValueError("이미 이미지를 생성하고 있습니다")
+
+    return scene
+
+
+async def get_storyboard_for_video(
+    storyboard_id: str,
+    user_id: str,
+) -> object:
+    """영상 생성용 콘티 조회 + 상태 검증 + 이미지 완성 확인.
+
+    실패 시 ``ValueError`` 를 발생시킨다.
+    """
+    record = await db.storyboard.find_first(
+        where={"id": storyboard_id, "userId": user_id},
+        include={"scenes": True},
+    )
+    if not record:
+        raise ValueError("콘티를 찾을 수 없습니다")
+
+    if record.status == "VIDEO_GENERATING":
+        raise ValueError("이미 영상을 생성하고 있습니다")
+
+    if record.status not in ("READY", "VIDEO_READY"):
+        raise ValueError("콘티가 준비되지 않았습니다 (이미지 생성 완료 필요)")
+
+    scenes = record.scenes or []
+    incomplete = [s for s in scenes if s.imageStatus != "COMPLETED"]
+    if incomplete:
+        raise ValueError(
+            f"{len(incomplete)}개 장면의 이미지가 아직 완성되지 않았습니다"
+        )
+
+    return record
+
+
+# ── WebSocket 핸들러용 DB 조회 함수 ──
+
+
+async def get_storyboard_status(
+    storyboard_id: str,
+    user_id: str,
+) -> dict | None:
+    """WS용 콘티 상태 조회. 없거나 소유권 불일치 시 None."""
+    record = await db.storyboard.find_first(
+        where={"id": storyboard_id, "userId": user_id},
+    )
+    if not record:
+        return None
+
+    status = record.status
+    progress = 100 if status == "READY" else (0 if status == "GENERATING" else -1)
+    return {
+        "id": storyboard_id,
+        "progress": max(progress, 0),
+        "step": (
+            "완료"
+            if status == "READY"
+            else ("생성 중" if status == "GENERATING" else "실패")
+        ),
+        "status": status,
+    }
+
+
+async def get_storyboard_video_status(
+    storyboard_id: str,
+    user_id: str,
+) -> dict | None:
+    """WS용 영상 생성 진행률 조회. 없거나 소유권 불일치 시 None."""
+    record = await db.storyboard.find_first(
+        where={"id": storyboard_id, "userId": user_id},
+        include={"scenes": True},
+    )
+    if not record:
+        return None
+
+    scenes = sorted(record.scenes or [], key=lambda s: s.sceneOrder)
+    total = len(scenes)
+    done = sum(1 for s in scenes if s.videoStatus in ("COMPLETED", "FAILED"))
+    overall = int((done / total) * 100) if total > 0 else 0
+
+    return {
+        "storyboard_id": storyboard_id,
+        "status": record.status,
+        "overall_progress": overall,
+        "estimated_remaining_seconds": 0,
+        "final_video_url": record.finalVideoUrl,
+        "scenes": [
+            {
+                "id": s.id,
+                "scene_order": s.sceneOrder,
+                "video_status": s.videoStatus,
+                "video_url": s.videoUrl,
+                "error": s.videoError,
+            }
+            for s in scenes
+        ],
+    }
+
+
+async def get_scene_image_status(
+    scene_id: str,
+    user_id: str,
+) -> dict | None:
+    """WS용 장면 이미지 상태 조회. 소유권 불일치/장면 없음 시 None."""
+    scene = await db.storyboardscene.find_unique(
+        where={"id": scene_id},
+        include={"storyboard": True},
+    )
+    if not scene or not scene.storyboard:
+        return None
+    if scene.storyboard.userId != user_id:
+        return None
+
+    img_status = scene.imageStatus
+    progress = (
+        100
+        if img_status == "COMPLETED"
+        else (0 if img_status in ("GENERATING", "PENDING") else -1)
+    )
+    return {
+        "id": scene_id,
+        "progress": max(progress, 0),
+        "step": (
+            "완료"
+            if img_status == "COMPLETED"
+            else ("생성 중" if img_status == "GENERATING" else "실패")
+        ),
+        "status": img_status,
+    }

@@ -7,13 +7,9 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
-from jose import JWTError, jwt
 from starlette.websockets import WebSocketDisconnect
 
-from app.core.config import settings
-from app.core.database import db
-from app.core.deps import get_current_user
-from app.core.security import ACCESS_TOKEN_COOKIE, ALGORITHM
+from app.core.deps import get_current_user, get_ws_user_id
 from app.schemas.auth import ErrorResponse
 from app.schemas.custom_character import (
     CharacterStyle,
@@ -23,14 +19,19 @@ from app.schemas.custom_character import (
     VoiceId,
 )
 from app.services.custom_character import (
+    create_custom_character_record,
     get_custom_character_by_id,
+    get_custom_character_status,
     get_custom_characters,
     process_custom_character,
+)
+from app.services.custom_character import (
+    delete_custom_character as svc_delete_custom_character,
 )
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/characters/custom", tags=["custom-characters"])
+router = APIRouter(prefix="/characters/custom", tags=["custom-characters"])
 
 # 진행률 브로드캐스트용 (character_id → set of WebSocket)
 _progress_subs: dict[str, set[WebSocket]] = {}
@@ -86,28 +87,25 @@ async def create_custom_character(
             )
 
     # DB에 PROCESSING 상태로 먼저 생성
-    record = await db.customcharacter.create(
-        data={
-            "name": name,
-            "description": description,
-            "style": style.value,
-            "voiceId": voice_id.value,
-            "imageUrl1": "",
-            "imageUrl2": "",
-            "userId": current_user["id"],
-        }
+    result = await create_custom_character_record(
+        name=name,
+        description=description,
+        style=style.value,
+        voice_id=voice_id.value,
+        user_id=current_user["id"],
     )
+    record_id = result["id"]
 
     # 백그라운드 태스크 시작
     async def progress_callback(pct: int, step: str) -> None:
         """WebSocket 구독자에게 진행률 전송, 완료/실패 시 연결 종료"""
-        subs = _progress_subs.get(record.id, set())
+        subs = _progress_subs.get(record_id, set())
         if not subs:
             return
         is_terminal = pct >= 100 or pct < 0
         msg = json.dumps(
             {
-                "character_id": record.id,
+                "character_id": record_id,
                 "progress": max(pct, 0),
                 "step": step,
                 "status": "FAILED" if pct < 0 else ("COMPLETED" if pct >= 100 else "PROCESSING"),
@@ -123,14 +121,14 @@ async def create_custom_character(
             except Exception:
                 dead.append(ws)
         if is_terminal:
-            _progress_subs.pop(record.id, None)
+            _progress_subs.pop(record_id, None)
         else:
             for ws in dead:
                 subs.discard(ws)
 
     task = asyncio.create_task(
         process_custom_character(
-            character_id=record.id,
+            character_id=record_id,
             user_id=current_user["id"],
             name=name,
             description=description,
@@ -145,7 +143,7 @@ async def create_custom_character(
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
-    return CustomCharacterCreateResponse(id=record.id)
+    return CustomCharacterCreateResponse(id=record_id)
 
 
 @router.get(
@@ -198,7 +196,7 @@ async def get_custom_character(
         },
     },
 )
-async def delete_custom_character(
+async def delete_custom_character_endpoint(
     character_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> None:
@@ -206,25 +204,13 @@ async def delete_custom_character(
 
     스토리보드에서 사용 중인 캐릭터는 삭제할 수 없습니다.
     """
-    record = await db.customcharacter.find_first(
-        where={"id": character_id, "userId": current_user["id"]},
-    )
-    if not record:
-        raise HTTPException(
-            status_code=404, detail="캐릭터를 찾을 수 없습니다"
-        )
-
-    # 사용 중인 스토리보드 확인
-    linked = await db.storyboard.count(
-        where={"customCharacterId": character_id}
-    )
-    if linked > 0:
-        raise HTTPException(
-            status_code=409,
-            detail="이 캐릭터를 사용하는 콘티가 있어 삭제할 수 없습니다",
-        )
-
-    await db.customcharacter.delete(where={"id": character_id})
+    try:
+        await svc_delete_custom_character(character_id, current_user["id"])
+    except ValueError as e:
+        msg = str(e)
+        if "찾을 수 없습니다" in msg:
+            raise HTTPException(status_code=404, detail=msg) from None
+        raise HTTPException(status_code=409, detail=msg) from None
 
 
 # ── WebSocket: 캐릭터 생성 진행률 ──
@@ -239,27 +225,20 @@ async def custom_character_progress_ws(ws: WebSocket, character_id: str) -> None
     await ws.accept()
 
     # 쿠키 기반 인증
-    token = ws.cookies.get(ACCESS_TOKEN_COOKIE)
-    user_id: str | None = None
-    if token:
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-            user_id = payload.get("sub")
-        except JWTError:
-            pass
+    user_id = await get_ws_user_id(ws)
     if not user_id:
         await ws.send_text(json.dumps({"error": "인증이 필요합니다"}))
         await ws.close(code=4001)
         return
 
     # 소유권 확인
-    record = await db.customcharacter.find_first(where={"id": character_id, "userId": user_id})
-    if not record:
+    char_status = await get_custom_character_status(character_id, user_id)
+    if not char_status:
         await ws.send_text(json.dumps({"error": "캐릭터를 찾을 수 없습니다"}))
         await ws.close(code=4004)
         return
 
-    status = record.status
+    status = char_status["status"]
     progress = 100 if status == "COMPLETED" else (0 if status == "PROCESSING" else -1)
     await ws.send_text(
         json.dumps(

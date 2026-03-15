@@ -8,13 +8,9 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
-from jose import JWTError, jwt
 from starlette.websockets import WebSocketDisconnect
 
-from app.core.config import settings
-from app.core.database import db
-from app.core.deps import get_current_user
-from app.core.security import ACCESS_TOKEN_COOKIE, ALGORITHM
+from app.core.deps import get_current_user, get_ws_user_id
 from app.schemas.auth import ErrorResponse
 from app.schemas.storyboard import (
     SceneImageRegenerateResponse,
@@ -28,15 +24,29 @@ from app.schemas.storyboard import (
     VideoGenerationStartResponse,
 )
 from app.services.storyboard import (
+    count_generating_storyboards,
+    create_storyboard_record,
     get_character_info,
+    get_scene_for_regenerate,
+    get_scene_image_status,
+    get_storyboard_detail,
+    get_storyboard_for_video,
+    get_storyboard_status,
+    get_storyboard_video_status,
     process_storyboard,
     regenerate_scene_image_task,
+)
+from app.services.storyboard import (
+    list_storyboards as svc_list_storyboards,
+)
+from app.services.storyboard import (
+    update_scene as svc_update_scene,
 )
 from app.services.video_generation import process_storyboard_videos
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/storyboards", tags=["storyboards"])
+router = APIRouter(prefix="/storyboards", tags=["storyboards"])
 
 # 진행률 브로드캐스트용
 _progress_subs: dict[str, set[WebSocket]] = {}
@@ -44,18 +54,6 @@ _background_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
 
 # 유저별 동시 생성 제한
 _MAX_CONCURRENT_PER_USER = 3
-
-
-async def _authenticate_ws(ws: WebSocket) -> str | None:
-    """WebSocket 쿠키에서 유저 ID 추출 (인증 실패 시 None)"""
-    token = ws.cookies.get(ACCESS_TOKEN_COOKIE)
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        return payload.get("sub")
-    except JWTError:
-        return None
 
 
 def _make_progress_callback(
@@ -138,12 +136,7 @@ async def create_storyboard(
         )
 
     # 동시 생성 제한 (유저별)
-    generating_count = await db.storyboard.count(
-        where={
-            "userId": current_user["id"],
-            "status": "GENERATING",
-        }
-    )
+    generating_count = await count_generating_storyboards(current_user["id"])
     if generating_count >= _MAX_CONCURRENT_PER_USER:
         raise HTTPException(
             status_code=429,
@@ -157,20 +150,19 @@ async def create_storyboard(
         raise HTTPException(status_code=400, detail=str(e)) from None
 
     # DB에 GENERATING 상태로 생성
-    record = await db.storyboard.create(
-        data={
-            "idea": req.idea,
-            "characterId": req.character_id,
-            "customCharacterId": req.custom_character_id,
-            "userId": current_user["id"],
-        }
+    result = await create_storyboard_record(
+        idea=req.idea,
+        character_id=req.character_id,
+        custom_character_id=req.custom_character_id,
+        user_id=current_user["id"],
     )
+    record_id: str = result["id"]
 
     # 백그라운드 태스크 시작
-    cb = _make_progress_callback(record.id)
+    cb = _make_progress_callback(record_id)
     task = asyncio.create_task(
         process_storyboard(
-            storyboard_id=record.id,
+            storyboard_id=record_id,
             user_id=current_user["id"],
             character_desc=char_info.description,
             idea=req.idea,
@@ -182,7 +174,7 @@ async def create_storyboard(
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
-    return StoryboardCreateResponse(id=record.id)
+    return StoryboardCreateResponse(id=record_id)
 
 
 @router.get(
@@ -197,12 +189,7 @@ async def list_storyboards(
     current_user: dict = Depends(get_current_user),
 ) -> StoryboardListResponse:
     """내가 만든 콘티 목록 조회"""
-    records = await db.storyboard.find_many(
-        where={"userId": current_user["id"]},
-        order={"createdAt": "desc"},
-        take=50,
-        include={"scenes": True},
-    )
+    records = await svc_list_storyboards(current_user["id"])
     items = [
         StoryboardListItem(
             id=r.id,
@@ -231,10 +218,7 @@ async def get_storyboard(
     current_user: dict = Depends(get_current_user),
 ) -> StoryboardDetailResponse:
     """콘티 상세 조회 (장면 포함)"""
-    record = await db.storyboard.find_first(
-        where={"id": storyboard_id, "userId": current_user["id"]},
-        include={"scenes": True},
-    )
+    record = await get_storyboard_detail(storyboard_id, current_user["id"])
     if not record:
         raise HTTPException(status_code=404, detail="콘티를 찾을 수 없습니다")
 
@@ -297,33 +281,20 @@ async def update_scene(
     STALE 상태에서 이미지 재생성을 요청하면 변경된 내용 기반으로
     새 이미지 프롬프트를 생성합니다.
     """
-    # 소유권 확인
-    sb = await db.storyboard.find_first(where={"id": storyboard_id, "userId": current_user["id"]})
-    if not sb:
-        raise HTTPException(status_code=404, detail="콘티를 찾을 수 없습니다")
+    try:
+        updated = await svc_update_scene(
+            storyboard_id,
+            scene_id,
+            current_user["id"],
+            title=req.title,
+            content=req.content,
+        )
+    except ValueError as e:
+        msg = str(e)
+        if "수정할 내용" in msg:
+            raise HTTPException(status_code=400, detail=msg) from None
+        raise HTTPException(status_code=404, detail=msg) from None
 
-    scene = await db.storyboardscene.find_first(
-        where={"id": scene_id, "storyboardId": storyboard_id}
-    )
-    if not scene:
-        raise HTTPException(status_code=404, detail="장면을 찾을 수 없습니다")
-
-    update_data: dict = {}
-    if req.title is not None:
-        update_data["title"] = req.title
-    if req.content is not None:
-        update_data["content"] = req.content
-        # content 변경 시 이미지와 불일치 → STALE로 표시
-        if scene.imageStatus == "COMPLETED":
-            update_data["imageStatus"] = "STALE"
-
-    if not update_data:
-        raise HTTPException(status_code=400, detail="수정할 내용이 없습니다")
-
-    updated = await db.storyboardscene.update(
-        where={"id": scene_id},
-        data=update_data,
-    )
     return SceneItem(
         id=updated.id,
         scene_order=updated.sceneOrder,
@@ -364,24 +335,18 @@ async def regenerate_scene_image(
     이미 생성 중이면 409를 반환합니다.
     진행률은 WebSocket(`/api/storyboards/ws/scenes/{scene_id}/image`)으로 확인 가능합니다.
     """
-    sb = await db.storyboard.find_first(where={"id": storyboard_id, "userId": current_user["id"]})
-    if not sb:
-        raise HTTPException(status_code=404, detail="콘티를 찾을 수 없습니다")
-
-    scene = await db.storyboardscene.find_first(
-        where={"id": scene_id, "storyboardId": storyboard_id}
-    )
-    if not scene:
-        raise HTTPException(status_code=404, detail="장면을 찾을 수 없습니다")
-
-    # 이미 생성 중인 장면 중복 요청 방어
-    if scene.imageStatus == "GENERATING":
-        raise HTTPException(
-            status_code=409,
-            detail="이미 이미지를 생성하고 있습니다",
+    try:
+        await get_scene_for_regenerate(
+            storyboard_id, scene_id, current_user["id"]
         )
+    except ValueError as e:
+        msg = str(e)
+        if "이미 이미지를 생성" in msg:
+            raise HTTPException(status_code=409, detail=msg) from None
+        raise HTTPException(status_code=404, detail=msg) from None
 
-    # 캐릭터 설명 조회
+    # 캐릭터 설명 조회 — scene에서 storyboard 참조가 없으므로 별도 조회
+    sb = await get_storyboard_detail(storyboard_id, current_user["id"])
     try:
         char_info = await get_character_info(sb.characterId, sb.customCharacterId)
     except ValueError as e:
@@ -414,39 +379,23 @@ async def storyboard_progress_ws(
     await ws.accept()
 
     # 쿠키 기반 인증
-    user_id = await _authenticate_ws(ws)
+    user_id = await get_ws_user_id(ws)
     if not user_id:
         await ws.send_text(json.dumps({"error": "인증이 필요합니다"}))
         await ws.close(code=4001)
         return
 
-    # 소유권 확인
-    record = await db.storyboard.find_first(where={"id": storyboard_id, "userId": user_id})
-    if not record:
+    # 소유권 확인 + 현재 상태 조회
+    status_data = await get_storyboard_status(storyboard_id, user_id)
+    if not status_data:
         await ws.send_text(json.dumps({"error": "콘티를 찾을 수 없습니다"}))
         await ws.close(code=4004)
         return
 
     # 현재 상태 즉시 전송
-    status = record.status
-    progress = 100 if status == "READY" else (0 if status == "GENERATING" else -1)
-    await ws.send_text(
-        json.dumps(
-            {
-                "id": storyboard_id,
-                "progress": max(progress, 0),
-                "step": (
-                    "완료"
-                    if status == "READY"
-                    else ("생성 중" if status == "GENERATING" else "실패")
-                ),
-                "status": status,
-            },
-            ensure_ascii=False,
-        )
-    )
+    await ws.send_text(json.dumps(status_data, ensure_ascii=False))
 
-    if status != "GENERATING":
+    if status_data["status"] != "GENERATING":
         await ws.close()
         return
 
@@ -503,33 +452,15 @@ async def generate_storyboard_videos(
     - 성공한 장면은 자동으로 합본 영상 생성
     - 실패한 장면에는 실패 사유(video_error) 포함
     """
-    record = await db.storyboard.find_first(
-        where={
-            "id": storyboard_id,
-            "userId": current_user["id"],
-        },
-        include={"scenes": True},
-    )
-    if not record:
-        raise HTTPException(status_code=404, detail="콘티를 찾을 수 없습니다")
-
-    if record.status == "VIDEO_GENERATING":
-        raise HTTPException(status_code=409, detail="이미 영상을 생성하고 있습니다")
-
-    if record.status not in ("READY", "VIDEO_READY"):
-        raise HTTPException(
-            status_code=400,
-            detail="콘티가 준비되지 않았습니다 (이미지 생성 완료 필요)",
-        )
-
-    # 모든 장면 이미지 완성 확인
-    scenes = record.scenes or []
-    incomplete = [s for s in scenes if s.imageStatus != "COMPLETED"]
-    if incomplete:
-        raise HTTPException(
-            status_code=400,
-            detail=(f"{len(incomplete)}개 장면의 이미지가 아직 완성되지 않았습니다"),
-        )
+    try:
+        await get_storyboard_for_video(storyboard_id, current_user["id"])
+    except ValueError as e:
+        msg = str(e)
+        if "찾을 수 없" in msg:
+            raise HTTPException(status_code=404, detail=msg) from None
+        if "이미 영상" in msg:
+            raise HTTPException(status_code=409, detail=msg) from None
+        raise HTTPException(status_code=400, detail=msg) from None
 
     # 영상 생성 콜백 (dict 메시지를 JSON으로 전송)
     video_sub_key = f"{storyboard_id}:video"
@@ -544,18 +475,18 @@ async def generate_storyboard_videos(
         )
         text = json.dumps(msg, ensure_ascii=False)
         dead: list[WebSocket] = []
-        for ws in subs:
+        for ws_item in subs:
             try:
-                await ws.send_text(text)
+                await ws_item.send_text(text)
                 if is_terminal:
-                    await ws.close()
+                    await ws_item.close()
             except Exception:
-                dead.append(ws)
+                dead.append(ws_item)
         if is_terminal:
             _progress_subs.pop(video_sub_key, None)
         else:
-            for ws in dead:
-                subs.discard(ws)
+            for ws_item in dead:
+                subs.discard(ws_item)
 
     task = asyncio.create_task(
         process_storyboard_videos(
@@ -585,51 +516,22 @@ async def video_progress_ws(
     """
     await ws.accept()
 
-    user_id = await _authenticate_ws(ws)
+    user_id = await get_ws_user_id(ws)
     if not user_id:
         await ws.send_text(json.dumps({"error": "인증이 필요합니다"}))
         await ws.close(code=4001)
         return
 
-    record = await db.storyboard.find_first(
-        where={"id": storyboard_id, "userId": user_id},
-        include={"scenes": True},
-    )
-    if not record:
+    video_data = await get_storyboard_video_status(storyboard_id, user_id)
+    if not video_data:
         await ws.send_text(json.dumps({"error": "콘티를 찾을 수 없습니다"}))
         await ws.close(code=4004)
         return
 
     # 현재 상태 즉시 전송
-    scenes = sorted(record.scenes or [], key=lambda s: s.sceneOrder)
-    total = len(scenes)
-    done = sum(1 for s in scenes if s.videoStatus in ("COMPLETED", "FAILED"))
-    overall = int((done / total) * 100) if total > 0 else 0
+    await ws.send_text(json.dumps(video_data, ensure_ascii=False))
 
-    await ws.send_text(
-        json.dumps(
-            {
-                "storyboard_id": storyboard_id,
-                "status": record.status,
-                "overall_progress": overall,
-                "estimated_remaining_seconds": 0,
-                "final_video_url": record.finalVideoUrl,
-                "scenes": [
-                    {
-                        "id": s.id,
-                        "scene_order": s.sceneOrder,
-                        "video_status": s.videoStatus,
-                        "video_url": s.videoUrl,
-                        "error": s.videoError,
-                    }
-                    for s in scenes
-                ],
-            },
-            ensure_ascii=False,
-        )
-    )
-
-    if record.status not in ("VIDEO_GENERATING",):
+    if video_data["status"] not in ("VIDEO_GENERATING",):
         await ws.close()
         return
 
@@ -658,47 +560,25 @@ async def scene_image_progress_ws(
     await ws.accept()
 
     # 쿠키 기반 인증
-    user_id = await _authenticate_ws(ws)
+    user_id = await get_ws_user_id(ws)
     if not user_id:
         await ws.send_text(json.dumps({"error": "인증이 필요합니다"}))
         await ws.close(code=4001)
         return
 
-    # 소유권 확인: scene → storyboard → userId
-    scene = await db.storyboardscene.find_unique(
-        where={"id": scene_id},
-        include={"storyboard": True},
-    )
-    if not scene or not scene.storyboard:
+    # 소유권 확인 + 현재 상태 조회
+    image_data = await get_scene_image_status(scene_id, user_id)
+    if image_data is None:
         await ws.send_text(json.dumps({"error": "장면을 찾을 수 없습니다"}))
         await ws.close(code=4004)
         return
-    if scene.storyboard.userId != user_id:
-        await ws.send_text(json.dumps({"error": "권한이 없습니다"}))
-        await ws.close(code=4003)
-        return
 
-    img_status = scene.imageStatus
-    progress = (
-        100 if img_status == "COMPLETED" else (0 if img_status in ("GENERATING", "PENDING") else -1)
-    )
-    await ws.send_text(
-        json.dumps(
-            {
-                "id": scene_id,
-                "progress": max(progress, 0),
-                "step": (
-                    "완료"
-                    if img_status == "COMPLETED"
-                    else ("생성 중" if img_status == "GENERATING" else "실패")
-                ),
-                "status": img_status,
-            },
-            ensure_ascii=False,
-        )
-    )
+    # scene_image_status에서 권한 불일치도 None 반환이므로
+    # 별도 권한 에러 분기는 불필요 (4004로 통합)
 
-    if img_status != "GENERATING":
+    await ws.send_text(json.dumps(image_data, ensure_ascii=False))
+
+    if image_data["status"] != "GENERATING":
         await ws.close()
         return
 

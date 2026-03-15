@@ -17,7 +17,7 @@ from app.services.creation_trend import get_creation_trends
 from app.services.trending import fetch_trending_keywords
 from app.services.video import get_generator
 
-router = APIRouter(prefix="/api/video", tags=["video"])
+router = APIRouter(prefix="/video", tags=["video"])
 
 
 @router.post(

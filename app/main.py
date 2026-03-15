@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
@@ -6,9 +8,6 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.api import router as api_router
-from app.api.custom_character import router as custom_char_router
-from app.api.storyboard import router as storyboard_router
-from app.api.ws import router as ws_router
 from app.core.config import settings
 from app.core.database import connect_db, disconnect_db
 from app.core.trend_manager import trend_manager
@@ -63,7 +62,7 @@ AI 기반 숏폼 영상 생성 플랫폼 백엔드 API
 
 ### WebSocket 엔드포인트
 
-#### `ws://{host}/ws/trends` — 실시간 트렌드 (인증 불필요)
+#### `ws://{host}/api/ws/trends` — 실시간 트렌드 (인증 불필요)
 - 연결 즉시 현재 데이터 전송, 이후 30초 간격 자동 업데이트
 - **youtube**: Google Trends 한국 인기 검색어 (10분 캐시)
 - **creation**: 플랫폼 내 24시간 영상 제작 키워드 순위
@@ -142,9 +141,6 @@ async def validation_error_handler(request: Request, exc: ValidationError):
 
 
 app.include_router(api_router, prefix="/api")
-app.include_router(custom_char_router)
-app.include_router(storyboard_router)
-app.include_router(ws_router)
 
 
 @app.get("/health")

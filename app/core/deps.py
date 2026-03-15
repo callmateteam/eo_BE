@@ -1,11 +1,23 @@
 from __future__ import annotations
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, WebSocket, status
 from jose import JWTError, jwt
 
 from app.core.config import settings
 from app.core.database import db
 from app.core.security import ACCESS_TOKEN_COOKIE, ALGORITHM
+
+
+async def get_ws_user_id(ws: WebSocket) -> str | None:
+    """WebSocket 쿠키에서 유저 ID 추출 (인증 실패 시 None)"""
+    token = ws.cookies.get(ACCESS_TOKEN_COOKIE)
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except JWTError:
+        return None
 
 
 async def get_current_user(request: Request) -> dict:

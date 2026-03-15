@@ -8,6 +8,8 @@ on:
       - "prisma/**"
       - "requirements.txt"
       - "Dockerfile"
+      - "docker-compose.yml"
+      - "scripts/**"
 
   workflow_dispatch:
 
@@ -25,45 +27,56 @@ jobs:
           script: |
             set -e
 
-            cd ~/eo-be
+            cd ~/eo_BE
 
             # 최신 코드 pull
             git pull origin main
 
             # .env 생성 (GitHub Secrets 기반)
-            echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" > .env
-            echo "SECRET_KEY=${{ secrets.SECRET_KEY }}" >> .env
-            echo "DEBUG=${{ secrets.DEBUG }}" >> .env
-            echo "YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}" >> .env
-            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
-            echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> .env
-            echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env
-            echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env
-            echo "S3_BUCKET=${{ secrets.S3_BUCKET }}" >> .env
-            echo 'ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS }}' >> .env
-            echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
-            echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env
-            echo "COOKIE_SECURE=${{ secrets.COOKIE_SECURE }}" >> .env
+            cat > .env << 'ENVEOF'
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            SECRET_KEY=${{ secrets.SECRET_KEY }}
+            DEBUG=${{ secrets.DEBUG }}
+            YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            AWS_REGION=${{ secrets.AWS_REGION }}
+            AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+            AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            S3_BUCKET=${{ secrets.S3_BUCKET }}
+            ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS }}
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+            GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
+            COOKIE_SECURE=${{ secrets.COOKIE_SECURE }}
+            COOKIE_SAMESITE=${{ secrets.COOKIE_SAMESITE }}
+            ENVEOF
+            # heredoc 앞 공백 제거
+            sed -i 's/^            //' .env
 
-            # 빌드 전 디스크 정리
+            # CRLF 방지
+            sed -i 's/\r$//' scripts/entrypoint.sh Dockerfile
+
+            # 디스크 정리
             docker builder prune -af
             docker image prune -af
 
-            # Docker 빌드 및 재시작
-            docker build -t eo-api .
-            docker stop eo-api || true
-            docker rm eo-api || true
-            docker run -d \
-              --name eo-api \
-              --restart unless-stopped \
-              --env-file .env \
-              -e TZ=Asia/Seoul \
-              -p 8000:8000 \
-              eo-api
+            # docker compose 빌드 및 재시작
+            docker compose down
+            docker compose up -d --build
 
-            # 헬스체크
-            sleep 3
-            curl -f http://localhost:8000/docs || echo "WARNING: Health check failed"
+            # 헬스체크 (최대 30초 대기)
+            for i in 1 2 3 4 5 6; do
+              sleep 5
+              if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+                echo "Health check passed!"
+                break
+              fi
+              if [ "$i" = "6" ]; then
+                echo "ERROR: Health check failed after 30s"
+                docker compose logs --tail 20
+                exit 1
+              fi
+            done
 
             # 이전 이미지 정리
             docker image prune -f

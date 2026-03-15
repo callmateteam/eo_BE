@@ -3,14 +3,12 @@ from __future__ import annotations
 import secrets
 from datetime import timedelta
 
+import bcrypt
 from fastapi import Response
 from jose import jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 from app.core.timezone import now_kst
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 ALGORITHM = "HS256"
 
@@ -38,8 +36,8 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str) 
         value=access_token,
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite="none",
+        secure=settings.cookie_secure_resolved,
+        samesite=settings.cookie_samesite_resolved,
         domain=settings.COOKIE_DOMAIN,
         path="/",
     )
@@ -48,8 +46,8 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str) 
         value=refresh_token,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
         httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite="none",
+        secure=settings.cookie_secure_resolved,
+        samesite=settings.cookie_samesite_resolved,
         domain=settings.COOKIE_DOMAIN,
         path="/api/auth",
     )
@@ -60,24 +58,32 @@ def clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(
         key=ACCESS_TOKEN_COOKIE,
         httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite="none",
+        secure=settings.cookie_secure_resolved,
+        samesite=settings.cookie_samesite_resolved,
         domain=settings.COOKIE_DOMAIN,
         path="/",
     )
     response.delete_cookie(
         key=REFRESH_TOKEN_COOKIE,
         httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite="none",
+        secure=settings.cookie_secure_resolved,
+        samesite=settings.cookie_samesite_resolved,
         domain=settings.COOKIE_DOMAIN,
         path="/api/auth",
     )
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    """비밀번호 검증"""
+    return bcrypt.checkpw(
+        plain_password.encode("utf-8"),
+        hashed_password.encode("utf-8"),
+    )
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    """비밀번호 해싱"""
+    return bcrypt.hashpw(
+        password.encode("utf-8"),
+        bcrypt.gensalt(),
+    ).decode("utf-8")

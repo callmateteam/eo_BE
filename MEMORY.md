@@ -37,9 +37,9 @@ _(아직 없음 - 발견 시 여기에 기록)_
 
 ## 환경 메모
 
-- Python: 3.9.6 (로컬) / 3.11+ (프로덕션 타겟)
-- venv 위치: `/Users/intalk/Desktop/개인/eo/be/.venv`
-- 활성화: `source .venv/bin/activate`
+- Python: 3.11+ (프로덕션 타겟)
+- venv 위치: `c:\Users\somem\Desktop\해커톤\eo_BE\.venv`
+- 활성화: `source .venv/Scripts/activate`
 
 ---
 
@@ -47,6 +47,7 @@ _(아직 없음 - 발견 시 여기에 기록)_
 
 ```bash
 # 서버 실행
+cd /c/Users/somem/Desktop/해커톤/eo_BE && source .venv/Scripts/activate
 uvicorn app.main:app --reload
 
 # 테스트

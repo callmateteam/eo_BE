@@ -40,7 +40,7 @@
 
 ### 테스트
 ```bash
-cd /Users/intalk/Desktop/개인/eo/be && source .venv/bin/activate
+cd /c/Users/somem/Desktop/해커톤/eo_BE && source .venv/Scripts/activate
 python -m pytest --cov=app --cov-report=term-missing -v
 ```
 
