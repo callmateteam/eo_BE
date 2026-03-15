@@ -77,7 +77,6 @@ class VeoVideoGenerator(VideoGenerator):
             "parameters": {
                 "aspectRatio": aspect_ratio,
                 "durationSeconds": min(duration, 8),
-                "numberOfVideos": 1,
             },
         }
 
