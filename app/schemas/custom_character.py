@@ -37,6 +37,21 @@ STYLE_PROMPT: dict[CharacterStyle, str] = {
 }
 
 
+class VoiceId(str, Enum):  # noqa: UP042
+    """OpenAI TTS 음성 선택지"""
+
+    ALLOY = "alloy"
+    ASH = "ash"
+    BALLAD = "ballad"
+    CORAL = "coral"
+    ECHO = "echo"
+    FABLE = "fable"
+    ONYX = "onyx"
+    NOVA = "nova"
+    SAGE = "sage"
+    SHIMMER = "shimmer"
+
+
 class CustomCharacterCreateResponse(BaseModel):
     """커스텀 캐릭터 생성 응답"""
 
@@ -56,6 +71,8 @@ class CustomCharacterItem(BaseModel):
     image_url_1: str
     image_url_2: str
     veo_prompt: str | None = None
+    voice_id: str = "alloy"
+    voice_style: str = ""
     status: str
     error_msg: str | None = None
     created_at: str

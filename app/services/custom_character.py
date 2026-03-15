@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json as json_mod
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -17,22 +18,20 @@ from app.schemas.custom_character import STYLE_PROMPT, CharacterStyle
 logger = logging.getLogger(__name__)
 
 # GPT-4o Vision 시스템 프롬프트
-SYSTEM_PROMPT = """You are a character description expert for AI video generation.
-Analyze the provided character images and user description, then generate a concise
-veoPrompt optimized for video generation.
+SYSTEM_PROMPT = """\
+Character expert for AI video+voice generation.
+Analyze images and description, output JSON with two fields.
 
 Rules:
-- Output ONLY the veoPrompt text, nothing else
-- Max 40 words - be concise but capture all visual identifiers
-- Include: height/build, hair, eyes, outfit, distinguishing marks
-- Do NOT include style or aspect ratio (added separately)
-- Use English only
-- Format: comma-separated descriptive phrases
-- Start with physical size/build description
+- Output ONLY valid JSON: {"veoPrompt":"...","voiceStyle":"..."}
+- veoPrompt: max 40 words, English, comma-separated phrases
+  height/build, hair, eyes, outfit, marks. No style/ratio.
+- voiceStyle: max 25 words, English, TTS voice instruction
+  tone, pitch, energy, Korean speaking style for this character
 
-Example output:
-170cm slim young woman, long silver hair, red eyes,
-black military coat with gold trim, sword on back, confident expression"""
+Example:
+{"veoPrompt":"170cm slim young woman, long silver hair, red eyes, black coat",\
+"voiceStyle":"Cool confident young woman, speaks Korean with elegant authority"}"""
 
 
 def _truncate_prompt(text: str, max_words: int = 40) -> str:
@@ -51,8 +50,8 @@ async def analyze_images_with_gpt(
     style: str,
     content_type_1: str,
     content_type_2: str,
-) -> str:
-    """GPT-4o Vision으로 이미지 분석 → veoPrompt 생성"""
+) -> tuple[str, str]:
+    """GPT-4o Vision으로 이미지 분석 → (veoPrompt, voiceStyle) 생성"""
     b64_1 = base64.b64encode(image_data_1).decode()
     b64_2 = base64.b64encode(image_data_2).decode()
 
@@ -72,7 +71,8 @@ async def analyze_images_with_gpt(
             },
             json={
                 "model": "gpt-4o",
-                "max_tokens": 150,
+                "max_tokens": 250,
+                "response_format": {"type": "json_object"},
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {
@@ -84,8 +84,8 @@ async def analyze_images_with_gpt(
                                     f"Character name: {name}\n"
                                     f"User description: {description}\n"
                                     f"Target style: {style_hint}\n\n"
-                                    "Analyze both images and generate an optimized "
-                                    "veoPrompt for this character."
+                                    "Analyze both images and generate "
+                                    "veoPrompt + voiceStyle JSON."
                                 ),
                             },
                             {
@@ -110,7 +110,10 @@ async def analyze_images_with_gpt(
         resp.raise_for_status()
         data = resp.json()
         raw = data["choices"][0]["message"]["content"].strip()
-        return _truncate_prompt(raw)
+        parsed = json_mod.loads(raw)
+        veo_prompt = _truncate_prompt(str(parsed.get("veoPrompt", "")))
+        voice_style = str(parsed.get("voiceStyle", ""))[:500]
+        return veo_prompt, voice_style
 
 
 async def process_custom_character(
@@ -151,7 +154,7 @@ async def process_custom_character(
 
         # Step 2: GPT-4o Vision 분석 (30-80%)
         await notify(40, "AI 캐릭터 분석 중...")
-        veo_prompt = await analyze_images_with_gpt(
+        veo_prompt, voice_style = await analyze_images_with_gpt(
             image_data_1,
             image_data_2,
             name,
@@ -168,6 +171,7 @@ async def process_custom_character(
             where={"id": character_id},
             data={
                 "veoPrompt": veo_prompt,
+                "voiceStyle": voice_style,
                 "status": "COMPLETED",
             },
         )
@@ -221,6 +225,8 @@ def _to_dict(c: object) -> dict:
         "image_url_1": c.imageUrl1,
         "image_url_2": c.imageUrl2,
         "veo_prompt": c.veoPrompt,
+        "voice_id": c.voiceId,
+        "voice_style": c.voiceStyle,
         "status": c.status,
         "error_msg": c.errorMsg,
         "created_at": c.createdAt.isoformat(),

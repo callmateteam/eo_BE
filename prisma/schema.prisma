@@ -56,6 +56,8 @@ model Character {
   costumeDesc    String            @map("costume_desc") @db.VarChar(500)
   distinctMarks  String            @map("distinct_marks") @db.VarChar(500)
   veoPrompt      String            @map("veo_prompt") @db.VarChar(2000)
+  voiceId        String            @default("alloy") @map("voice_id") @db.VarChar(50)
+  voiceStyle     String            @default("") @map("voice_style") @db.VarChar(500)
   bodyType       String            @map("body_type") @db.VarChar(50)
   primaryColor   String            @map("primary_color") @db.VarChar(30)
   sortOrder      Int               @default(0) @map("sort_order")
@@ -120,6 +122,8 @@ model CustomCharacter {
   imageUrl1   String                @map("image_url_1") @db.VarChar(500)
   imageUrl2   String                @map("image_url_2") @db.VarChar(500)
   veoPrompt   String?               @map("veo_prompt") @db.VarChar(2000)
+  voiceId     String                @default("alloy") @map("voice_id") @db.VarChar(50)
+  voiceStyle  String                @default("") @map("voice_style") @db.VarChar(500)
   status      CustomCharacterStatus @default(PROCESSING)
   errorMsg    String?               @map("error_msg") @db.VarChar(500)
   userId      String                @map("user_id") @db.Uuid
@@ -135,6 +139,15 @@ model CustomCharacter {
 enum StoryboardStatus {
   GENERATING
   READY
+  VIDEO_GENERATING
+  VIDEO_READY
+  FAILED
+}
+
+enum SceneVideoStatus {
+  PENDING
+  GENERATING
+  COMPLETED
   FAILED
 }
 
@@ -145,6 +158,9 @@ model Storyboard {
   customCharacterId  String?          @map("custom_character_id") @db.Uuid
   status             StoryboardStatus @default(GENERATING)
   errorMsg           String?          @map("error_msg") @db.VarChar(500)
+  heroFrameUrl       String?          @map("hero_frame_url") @db.VarChar(500)
+  bgmMood            String?          @map("bgm_mood") @db.VarChar(50)
+  finalVideoUrl      String?          @map("final_video_url") @db.VarChar(500)
   userId             String           @map("user_id") @db.Uuid
   createdAt          DateTime         @default(now()) @map("created_at")
 
@@ -174,7 +190,15 @@ model StoryboardScene {
   imagePrompt    String           @map("image_prompt") @db.VarChar(2000)
   imageUrl       String?          @map("image_url") @db.VarChar(500)
   imageStatus    SceneImageStatus @default(PENDING) @map("image_status")
+  hasCharacter   Boolean          @default(true) @map("has_character")
   duration       Float            @default(5.0)
+  narration      String?          @db.VarChar(1000)
+  narrationStyle String           @default("none") @map("narration_style") @db.VarChar(20)
+  narrationUrl   String?          @map("narration_url") @db.VarChar(500)
+  videoUrl       String?          @map("video_url") @db.VarChar(500)
+  videoStatus    SceneVideoStatus @default(PENDING) @map("video_status")
+  videoError     String?          @map("video_error") @db.VarChar(500)
+  videoStartedAt DateTime?        @map("video_started_at")
   createdAt      DateTime         @default(now()) @map("created_at")
 
   storyboard     Storyboard       @relation(fields: [storyboardId], references: [id], onDelete: Cascade)

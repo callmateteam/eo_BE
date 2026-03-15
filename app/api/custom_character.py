@@ -20,6 +20,7 @@ from app.schemas.custom_character import (
     CustomCharacterCreateResponse,
     CustomCharacterItem,
     CustomCharacterListResponse,
+    VoiceId,
 )
 from app.services.custom_character import (
     get_custom_character_by_id,
@@ -55,6 +56,7 @@ async def create_custom_character(
     name: str = Form(min_length=1, max_length=50, description="캐릭터 이름"),
     description: str = Form(min_length=1, max_length=500, description="캐릭터 설명"),
     style: CharacterStyle = Form(description="렌더링 스타일"),
+    voice_id: VoiceId = Form(default=VoiceId.ALLOY, description="TTS 음성"),
     image1: UploadFile = File(description="캐릭터 이미지 1"),
     image2: UploadFile = File(description="캐릭터 이미지 2"),
     current_user: dict = Depends(get_current_user),
@@ -89,6 +91,7 @@ async def create_custom_character(
             "name": name,
             "description": description,
             "style": style.value,
+            "voiceId": voice_id.value,
             "imageUrl1": "",
             "imageUrl2": "",
             "userId": current_user["id"],
@@ -182,6 +185,48 @@ async def get_custom_character(
     return CustomCharacterItem(**char)
 
 
+@router.delete(
+    "/{character_id}",
+    status_code=204,
+    summary="커스텀 캐릭터 삭제",
+    responses={
+        401: {"model": ErrorResponse, "description": "인증 필요"},
+        404: {"model": ErrorResponse, "description": "캐릭터를 찾을 수 없음"},
+        409: {
+            "model": ErrorResponse,
+            "description": "사용 중인 캐릭터 (스토리보드 연결)",
+        },
+    },
+)
+async def delete_custom_character(
+    character_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> None:
+    """커스텀 캐릭터 삭제 (본인 소유만)
+
+    스토리보드에서 사용 중인 캐릭터는 삭제할 수 없습니다.
+    """
+    record = await db.customcharacter.find_first(
+        where={"id": character_id, "userId": current_user["id"]},
+    )
+    if not record:
+        raise HTTPException(
+            status_code=404, detail="캐릭터를 찾을 수 없습니다"
+        )
+
+    # 사용 중인 스토리보드 확인
+    linked = await db.storyboard.count(
+        where={"customCharacterId": character_id}
+    )
+    if linked > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="이 캐릭터를 사용하는 콘티가 있어 삭제할 수 없습니다",
+        )
+
+    await db.customcharacter.delete(where={"id": character_id})
+
+
 # ── WebSocket: 캐릭터 생성 진행률 ──
 
 
@@ -198,27 +243,19 @@ async def custom_character_progress_ws(ws: WebSocket, character_id: str) -> None
     user_id: str | None = None
     if token:
         try:
-            payload = jwt.decode(
-                token, settings.SECRET_KEY, algorithms=[ALGORITHM]
-            )
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
             user_id = payload.get("sub")
         except JWTError:
             pass
     if not user_id:
-        await ws.send_text(
-            json.dumps({"error": "인증이 필요합니다"})
-        )
+        await ws.send_text(json.dumps({"error": "인증이 필요합니다"}))
         await ws.close(code=4001)
         return
 
     # 소유권 확인
-    record = await db.customcharacter.find_first(
-        where={"id": character_id, "userId": user_id}
-    )
+    record = await db.customcharacter.find_first(where={"id": character_id, "userId": user_id})
     if not record:
-        await ws.send_text(
-            json.dumps({"error": "캐릭터를 찾을 수 없습니다"})
-        )
+        await ws.send_text(json.dumps({"error": "캐릭터를 찾을 수 없습니다"}))
         await ws.close(code=4004)
         return
 

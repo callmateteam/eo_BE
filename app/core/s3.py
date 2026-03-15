@@ -40,3 +40,24 @@ def upload_image(
     )
 
     return f"https://{settings.S3_BUCKET}.s3.{settings.AWS_REGION}.amazonaws.com/{key}"
+
+
+def upload_video(
+    data: bytes,
+    user_id: str,
+    *,
+    content_type: str = "video/mp4",
+    folder: str = "storyboard-videos",
+) -> str:
+    """영상을 S3에 업로드하고 URL 반환"""
+    key = f"{folder}/{user_id}/{uuid.uuid4().hex}.mp4"
+
+    client = _get_client()
+    client.put_object(
+        Bucket=settings.S3_BUCKET,
+        Key=key,
+        Body=data,
+        ContentType=content_type,
+    )
+
+    return f"https://{settings.S3_BUCKET}.s3.{settings.AWS_REGION}.amazonaws.com/{key}"
