@@ -210,23 +210,22 @@ async def _generate_new(prompt: str) -> bytes:
 
 
 async def _generate_with_edit(prompt: str, reference_bytes: bytes) -> bytes:
-    """히어로 프레임을 참조하여 편집 API로 캐릭터 일관성 유지"""
-    ref_b64 = base64.b64encode(reference_bytes).decode()
-
+    """히어로 프레임을 참조하여 편집 API로 캐릭터 일관성 유지 (multipart/form-data)"""
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
             "https://api.openai.com/v1/images/edits",
             headers={
                 "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                "Content-Type": "application/json",
             },
-            json={
+            data={
                 "model": "gpt-image-1",
-                "image": ref_b64,
                 "prompt": prompt,
-                "n": 1,
+                "n": "1",
                 "size": "1024x1024",
                 "quality": "medium",
+            },
+            files={
+                "image": ("reference.png", reference_bytes, "image/png"),
             },
         )
         resp.raise_for_status()
