@@ -27,7 +27,7 @@ Rules:
 - Total ≤ 60s, each scene 3-10s
 - Output ONLY valid JSON array
 - 3-5 scenes (strictly, never more than 5)
-- imagePrompt: English, max 20 words, opening shot of the scene only. NEVER include text/letters/words in the scene description. Use symbols, diagrams, or gestures instead
+- imagePrompt: English, max 40 words. Must describe: (1) character action, (2) specific background/location matching the scene context, (3) specific objects/food/props with detail. NEVER include text/letters/words. Use symbols or gestures instead
 - title/content: Korean, concise
 - duration: action=short, dialogue=longer
 - hasCharacter: true if the character appears in this scene, false otherwise
@@ -160,11 +160,11 @@ async def generate_scene_image(
         f"Scene: {image_prompt}. "
         "Japanese anime style, hand-drawn cel animation look. "
         "Warm natural lighting, soft shadows. "
-        "Keep the character's appearance exactly consistent with the reference. "
+        "Keep the character's appearance exactly consistent with the reference image. "
+        "The background and setting must match the scene description exactly. "
         "Avoid photorealistic or 3D render look. "
         "IMPORTANT: Do not render any text, letters, words, or written characters in the image. "
-        "Replace any text with simple geometric shapes, symbols, or abstract patterns. "
-        "Blackboards should show only math symbols, diagrams, or simple shapes instead of written words."
+        "Replace any text with simple geometric shapes, symbols, or abstract patterns."
     )[:4000]
 
     async with _get_semaphore():

@@ -367,7 +367,7 @@ async def _download_and_upload(
     if not video_url or not video_url.startswith("http"):
         return None
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
         resp = await client.get(video_url)
         resp.raise_for_status()
         video_bytes = resp.content
