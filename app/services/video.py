@@ -125,7 +125,8 @@ class VeoVideoGenerator(VideoGenerator):
         response = data.get("response", {})
         videos = response.get("generatedVideos", [])
         if not videos:
-            raise RuntimeError("Veo 응답에 영상이 없습니다")
+            logger.error("Veo 응답 구조: %s", data)
+            raise RuntimeError(f"Veo 응답에 영상이 없습니다: {data}")
 
         video = videos[0].get("video", {})
         uri = video.get("uri")
