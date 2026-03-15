@@ -35,7 +35,14 @@ class SceneItem(BaseModel):
     image_prompt: str
     image_url: str | None = None
     image_status: str = "PENDING"
+    has_character: bool = True
     duration: float
+    narration: str | None = None
+    narration_style: str = "none"
+    narration_url: str | None = None
+    video_url: str | None = None
+    video_status: str = "PENDING"
+    video_error: str | None = None
 
 
 class StoryboardDetailResponse(BaseModel):
@@ -47,6 +54,8 @@ class StoryboardDetailResponse(BaseModel):
     custom_character_id: str | None = None
     status: str
     error_msg: str | None = None
+    bgm_mood: str | None = None
+    final_video_url: str | None = None
     scenes: list[SceneItem]
     total_duration: float
     created_at: str
@@ -83,3 +92,35 @@ class StoryboardListResponse(BaseModel):
 
     storyboards: list[StoryboardListItem]
     total: int
+
+
+# ── 영상 생성 관련 ──
+
+
+class VideoGenerationStartResponse(BaseModel):
+    """영상 생성 시작 응답"""
+
+    storyboard_id: str
+    status: str = "VIDEO_GENERATING"
+    message: str = "영상 생성이 시작되었습니다."
+
+
+class SceneVideoProgressItem(BaseModel):
+    """WS 메시지 내 장면별 영상 상태"""
+
+    id: str
+    scene_order: int
+    video_status: str
+    video_url: str | None = None
+    error: str | None = None
+
+
+class VideoProgressMessage(BaseModel):
+    """영상 생성 진행률 WS 메시지"""
+
+    storyboard_id: str
+    status: str
+    overall_progress: int
+    estimated_remaining_seconds: int
+    final_video_url: str | None = None
+    scenes: list[SceneVideoProgressItem]

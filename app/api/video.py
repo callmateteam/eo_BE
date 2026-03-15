@@ -1,4 +1,4 @@
-"""영상 생성 API 라우터"""
+"""영상 생성 API 라우터 (Kling AI 기반)"""
 
 from __future__ import annotations
 
@@ -34,10 +34,11 @@ async def generate_video(
     req: VideoGenerateRequest,
     current_user: dict = Depends(get_current_user),
 ) -> VideoTaskResponse:
-    """영상 생성 요청
+    """영상 생성 요청 (Kling AI)
 
-    캐릭터 ID와 프롬프트를 받아 영상 생성 작업을 시작합니다.
-    캐릭터의 veo_prompt + 사용자 prompt를 조합하여 영상 생성 API에 전달합니다.
+    캐릭터 ID와 프롬프트를 받아 Kling AI 영상 생성 작업을 시작합니다.
+    캐릭터의 이미지가 있으면 image-to-video, 없으면 text-to-video로 자동 선택됩니다.
+    mode(std/pro)에 따라 standard 또는 pro 모델이 사용됩니다.
     """
     # 캐릭터 조회
     character = await get_character_by_id(req.character_id)
@@ -62,7 +63,6 @@ async def generate_video(
         prompt=full_prompt,
         image_url=character.get("image_url"),
         duration=req.duration,
-        mode=req.mode.value,
         aspect_ratio=req.aspect_ratio.value,
     )
 
@@ -95,10 +95,10 @@ async def get_video_status(
     task_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> VideoStatusResponse:
-    """영상 생성 상태 조회
+    """영상 생성 상태 조회 (Kling AI)
 
-    task_id로 영상 생성 작업의 현재 상태를 조회합니다.
-    status: submitted → processing → completed / failed
+    task_id로 Kling AI 영상 생성 작업의 현재 상태를 조회합니다.
+    status: IN_PROGRESS → SUCCESS / FAILED
     """
     generator = get_generator()
     result = await generator.get_status(task_id)

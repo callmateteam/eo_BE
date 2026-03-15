@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # OpenAI (GPT-4o Vision - 커스텀 캐릭터 분석)
     OPENAI_API_KEY: str = ""
 
+    # Google Veo (영상 생성) — deprecated, Kling으로 전환
+    GOOGLE_API_KEY: str = ""
+    VEO_MODEL: str = "veo-2.0-generate-001"
+
+    # Kling AI (kie.ai 경유 영상 생성)
+    KLING_API_KEY: str = ""
+    KLING_MODEL: str = "pro-text-to-video"
+    KLING_I2V_MODEL: str = "pro-image-to-video"
+    KLING_BASE_URL: str = "https://kling3api.com"
+    KLING_POLL_INTERVAL: int = 5
+    KLING_MAX_WAIT: int = 300
+
     # S3
     S3_BUCKET: str = ""
 
