@@ -169,6 +169,7 @@ async def create_storyboard(
             progress_callback=cb,
             voice_id=char_info.voice_id,
             voice_style=char_info.voice_style,
+            character_image_url=char_info.image_url,
         )
     )
     _background_tasks.add(task)

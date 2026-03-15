@@ -157,9 +157,11 @@ async def generate_scene_image(
     """
     full_prompt = (
         f"{character_desc}. "
-        f"Opening shot: {image_prompt}. "
-        "Single frame, cinematic still, high detail. "
-        "Keep the character's appearance exactly consistent with the reference."
+        f"Scene: {image_prompt}. "
+        "Japanese anime style, hand-drawn cel animation look. "
+        "Warm natural lighting, soft shadows. "
+        "Keep the character's appearance exactly consistent with the reference. "
+        "Avoid photorealistic or 3D render look."
     )[:4000]
 
     async with _get_semaphore():
@@ -241,12 +243,16 @@ async def _generate_with_edit(prompt: str, reference_bytes: bytes) -> bytes:
 
 
 class CharacterInfo:
-    """캐릭터 설명 + 음성 설정"""
+    """캐릭터 설명 + 음성 설정 + 원본 이미지 URL"""
 
-    def __init__(self, description: str, voice_id: str, voice_style: str) -> None:
+    def __init__(
+        self, description: str, voice_id: str, voice_style: str,
+        image_url: str | None = None,
+    ) -> None:
         self.description = description
         self.voice_id = voice_id
         self.voice_style = voice_style
+        self.image_url = image_url
 
 
 async def get_character_description(
@@ -262,12 +268,23 @@ async def get_character_info(
     character_id: str | None,
     custom_character_id: str | None,
 ) -> CharacterInfo:
-    """캐릭터 ID로 설명 + 음성 설정 조회"""
+    """캐릭터 ID로 설명 + 음성 설정 조회 (디테일 포함)"""
     if character_id:
         char = await db.character.find_unique(where={"id": character_id})
         if not char:
             raise ValueError("캐릭터를 찾을 수 없습니다")
-        return CharacterInfo(char.veoPrompt, char.voiceId, char.voiceStyle)
+        # 풍부한 디테일로 캐릭터 설명 구성
+        parts = [char.veoPrompt or ""]
+        if char.faceFeatures:
+            parts.append(f"Face: {char.faceFeatures}")
+        if char.costumeDesc:
+            parts.append(f"Outfit: {char.costumeDesc}")
+        if char.distinctMarks:
+            parts.append(f"Key features: {char.distinctMarks}")
+        if char.bodyBuild:
+            parts.append(f"Build: {char.bodyBuild}")
+        desc = ". ".join(p for p in parts if p)
+        return CharacterInfo(desc, char.voiceId, char.voiceStyle, char.imageUrl)
     if custom_character_id:
         cc = await db.customcharacter.find_unique(where={"id": custom_character_id})
         if not cc:
@@ -287,6 +304,7 @@ async def process_storyboard(
     *,
     voice_id: str = "alloy",
     voice_style: str = "",
+    character_image_url: str | None = None,
 ) -> None:
     """콘티 생성 전체 파이프라인 (백그라운드)"""
 
@@ -338,13 +356,26 @@ async def process_storyboard(
 
         hero_frame_bytes: bytes | None = None
 
-        # 3-1: 첫 번째 캐릭터 장면 → 히어로 프레임 (순차)
+        # S3 원본 캐릭터 이미지를 참조용으로 다운로드
+        ref_image_bytes: bytes | None = None
+        if character_image_url:
+            try:
+                async with httpx.AsyncClient(timeout=30) as dl_client:
+                    ref_resp = await dl_client.get(character_image_url)
+                    ref_resp.raise_for_status()
+                    ref_image_bytes = ref_resp.content
+                logger.info("캐릭터 원본 이미지 다운로드 완료: %d bytes", len(ref_image_bytes))
+            except Exception:
+                logger.warning("캐릭터 원본 이미지 다운로드 실패, 텍스트만 사용")
+
+        # 3-1: 첫 번째 캐릭터 장면 → 히어로 프레임 (순차, 원본 이미지 참조)
         if char_scenes:
             hero_scene = char_scenes[0]
             await notify(45, "캐릭터 히어로 프레임 생성 중...")
             try:
                 s3_url, hero_frame_bytes = await generate_scene_image(
-                    hero_scene.imagePrompt, character_desc, user_id
+                    hero_scene.imagePrompt, character_desc, user_id,
+                    reference_image_bytes=ref_image_bytes,
                 )
                 await db.storyboardscene.update(
                     where={"id": hero_scene.id},
@@ -361,6 +392,9 @@ async def process_storyboard(
                     where={"id": hero_scene.id},
                     data={"imageStatus": "FAILED"},
                 )
+
+        # 원본 참조 이미지 메모리 해제 (히어로 프레임으로 대체됨)
+        del ref_image_bytes
 
         await notify(
             55,
