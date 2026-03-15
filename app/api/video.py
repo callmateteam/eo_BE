@@ -67,7 +67,7 @@ async def generate_video(
     )
 
     # 영상 생성 시 트렌드 실시간 broadcast
-    youtube_raw = await fetch_trending_keywords(max_results=10)
+    youtube_raw = await fetch_trending_keywords(max_results=5)
     creation_raw = await get_creation_trends(limit=10)
     await trend_manager.broadcast(
         {

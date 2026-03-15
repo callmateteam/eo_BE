@@ -26,7 +26,7 @@ Create scene cuts from character + idea.
 Rules:
 - Total ≤ 60s, each scene 3-10s
 - Output ONLY valid JSON array
-- 3-8 scenes
+- 3-5 scenes (strictly, never more than 5)
 - imagePrompt: English, max 20 words, opening shot of the scene only. NEVER include text/letters/words in the scene description. Use symbols, diagrams, or gestures instead
 - title/content: Korean, concise
 - duration: action=short, dialogue=longer

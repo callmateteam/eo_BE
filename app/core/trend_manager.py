@@ -54,7 +54,7 @@ class TrendManager:
         while True:
             try:
                 if self._connections:
-                    youtube_raw = await fetch_trending_keywords(max_results=10)
+                    youtube_raw = await fetch_trending_keywords(max_results=5)
                     creation_raw = await get_creation_trends(limit=10)
 
                     await self.broadcast(

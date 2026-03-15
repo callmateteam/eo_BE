@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 from defusedxml import ElementTree
 
 logger = logging.getLogger(__name__)
+
+_HANGUL_RE = re.compile(r"[가-힣]")
 
 GOOGLE_TRENDS_RSS = "https://trends.google.co.kr/trending/rss?geo=KR"
 
@@ -49,15 +52,26 @@ async def _fetch_google_trends() -> list[dict]:
         title = item.findtext("title", "").strip()
         traffic = item.findtext(f"{{{ht_ns}}}approx_traffic", "").strip()
 
-        if not title:
+        if not title or not _HANGUL_RE.search(title):
             continue
 
         results.append(
             {
-                "rank": idx + 1,
                 "keyword": title,
                 "traffic": traffic,
             }
         )
+
+    # 검색량 기준 내림차순 정렬 후 rank 부여
+    def _parse_traffic(t: str) -> int:
+        num = t.replace("+", "").replace(",", "").strip()
+        try:
+            return int(num)
+        except ValueError:
+            return 0
+
+    results.sort(key=lambda x: _parse_traffic(x["traffic"]), reverse=True)
+    for i, r in enumerate(results):
+        r["rank"] = i + 1
 
     return results

@@ -27,7 +27,7 @@ async def trends_websocket(ws: WebSocket) -> None:
 
     try:
         # 연결 즉시 현재 데이터 전송
-        youtube_raw = await fetch_trending_keywords(max_results=10)
+        youtube_raw = await fetch_trending_keywords(max_results=5)
         creation_raw = await get_creation_trends(limit=10)
 
         await ws.send_text(
