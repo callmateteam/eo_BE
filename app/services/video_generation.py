@@ -20,7 +20,7 @@ from app.services.video_merge import SceneInput, merge_storyboard_video
 logger = logging.getLogger(__name__)
 
 # 동시 영상 생성 제한 (장면 단위)
-_VIDEO_SEMAPHORE = asyncio.Semaphore(2)  # Veo rate limit 대응: 동시 2개
+_VIDEO_SEMAPHORE = asyncio.Semaphore(1)  # Veo rate limit 대응: 순차 1개씩
 
 # 장면당 예상 소요시간 (초) — 실측 데이터 없을 때 기본값
 _DEFAULT_SCENE_DURATION_ESTIMATE = 30
@@ -196,6 +196,12 @@ async def _generate_scene_video(
     scene_start = time.monotonic()
 
     async with _VIDEO_SEMAPHORE:
+        # Veo rate limit 방지: 장면 순서에 따라 딜레이
+        if scene.sceneOrder > 1:
+            delay = (scene.sceneOrder - 1) * 15
+            logger.info("Veo rate limit 방지: 장면%d, %d초 대기", scene.sceneOrder, delay)
+            await asyncio.sleep(delay)
+
         try:
             generator = get_generator()
 
