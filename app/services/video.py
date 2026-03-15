@@ -79,10 +79,21 @@ class VeoVideoGenerator(VideoGenerator):
             },
         }
 
+        # 429 rate limit 시 최대 3회 재시도 (30초 간격)
+        data: dict = {}
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(url, json=body, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+            for attempt in range(3):
+                resp = await client.post(url, json=body, headers=headers)
+                if resp.status_code == 429:
+                    wait = 30 * (attempt + 1)
+                    logger.warning("Veo 429 rate limit, %d초 후 재시도 (%d/3)", wait, attempt + 1)
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            else:
+                raise RuntimeError("Veo API rate limit 초과 (3회 재시도 실패)")
 
         op_name = data.get("name")
         if not op_name:
@@ -123,7 +134,15 @@ class VeoVideoGenerator(VideoGenerator):
             raise RuntimeError(f"Veo 영상 생성 실패: {error}")
 
         response = data.get("response", {})
+
+        # Veo API 응답 구조 호환: generatedVideos 또는 generateVideoResponse
         videos = response.get("generatedVideos", [])
+        if not videos:
+            gen_resp = response.get("generateVideoResponse", {})
+            samples = gen_resp.get("generatedSamples", [])
+            if samples:
+                videos = samples
+
         if not videos:
             logger.error("Veo 응답 구조: %s", data)
             raise RuntimeError(f"Veo 응답에 영상이 없습니다: {data}")
