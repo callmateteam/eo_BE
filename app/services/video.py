@@ -69,8 +69,7 @@ class VeoVideoGenerator(VideoGenerator):
         }
 
         instances: list[dict] = [{"prompt": prompt}]
-        if image_url:
-            instances[0]["image"] = {"imageUrl": image_url}
+        # Veo API는 현재 text-to-video만 지원 (imageUrl 미지원)
 
         body = {
             "instances": instances,
