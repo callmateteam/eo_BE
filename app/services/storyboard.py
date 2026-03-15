@@ -276,17 +276,8 @@ async def get_character_info(
         char = await db.character.find_unique(where={"id": character_id})
         if not char:
             raise ValueError("캐릭터를 찾을 수 없습니다")
-        # 풍부한 디테일로 캐릭터 설명 구성
-        parts = [char.veoPrompt or ""]
-        if char.faceFeatures:
-            parts.append(f"Face: {char.faceFeatures}")
-        if char.costumeDesc:
-            parts.append(f"Outfit: {char.costumeDesc}")
-        if char.distinctMarks:
-            parts.append(f"Key features: {char.distinctMarks}")
-        if char.bodyBuild:
-            parts.append(f"Build: {char.bodyBuild}")
-        desc = ". ".join(p for p in parts if p)
+        # 영문 promptFeatures를 기본으로 사용 (이미지 생성 최적화)
+        desc = char.promptFeatures or char.veoPrompt or ""
         return CharacterInfo(desc, char.voiceId, char.voiceStyle, char.imageUrl)
     if custom_character_id:
         cc = await db.customcharacter.find_unique(where={"id": custom_character_id})

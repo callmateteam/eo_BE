@@ -367,8 +367,11 @@ async def _download_and_upload(
     if not video_url or not video_url.startswith("http"):
         return None
 
+    from app.core.config import settings
+
+    headers = {"x-goog-api-key": settings.GOOGLE_API_KEY}
     async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-        resp = await client.get(video_url)
+        resp = await client.get(video_url, headers=headers)
         resp.raise_for_status()
         video_bytes = resp.content
 
