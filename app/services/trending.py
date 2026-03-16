@@ -90,7 +90,10 @@ async def fetch_trending_keywords(max_results: int = 5) -> list[dict]:
         # 2. GPT 필터링
         filtered = await _filter_keywords_gpt(raw_keywords)
 
-        # 3. 캐시 저장
+        # 3. YouTube 조회수 조회 + 정렬
+        filtered = await _enrich_with_views(filtered)
+
+        # 4. 캐시 저장
         _filtered_cache["data"] = filtered
         _filtered_cache["expires_at"] = now + FILTERED_CACHE_TTL
 
@@ -328,6 +331,83 @@ async def _filter_keywords_gpt(raw_keywords: list[dict]) -> list[dict]:
     except Exception:
         logger.exception("GPT 키워드 필터링 실패, 원본 반환")
         return raw_keywords
+
+
+async def _enrich_with_views(keywords: list[dict]) -> list[dict]:
+    """키워드별 YouTube 검색 → 상위 영상 조회수 평균 계산 → 조회수 기준 정렬"""
+    api_key = settings.YOUTUBE_API_KEY or settings.GOOGLE_API_KEY
+    if not api_key or not keywords:
+        return keywords
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for kw_item in keywords:
+                keyword = kw_item["keyword"]
+                # 키워드를 단어별로 분리해서 각각 검색
+                words = keyword.split()
+                total_views = 0
+                word_count = 0
+
+                for word in words:
+                    if len(word) < 2:
+                        continue
+                    # YouTube 검색 → 상위 3개 영상 ID
+                    search_resp = await client.get(
+                        "https://www.googleapis.com/youtube/v3/search",
+                        params={
+                            "part": "id",
+                            "q": word,
+                            "type": "video",
+                            "regionCode": "KR",
+                            "maxResults": 3,
+                            "order": "viewCount",
+                            "key": api_key,
+                        },
+                    )
+                    if search_resp.status_code != 200:
+                        continue
+
+                    video_ids = [
+                        item["id"]["videoId"]
+                        for item in search_resp.json().get("items", [])
+                        if item.get("id", {}).get("videoId")
+                    ]
+                    if not video_ids:
+                        continue
+
+                    # 영상 조회수 조회
+                    stats_resp = await client.get(
+                        "https://www.googleapis.com/youtube/v3/videos",
+                        params={
+                            "part": "statistics",
+                            "id": ",".join(video_ids),
+                            "key": api_key,
+                        },
+                    )
+                    if stats_resp.status_code != 200:
+                        continue
+
+                    views = [
+                        int(v["statistics"].get("viewCount", 0))
+                        for v in stats_resp.json().get("items", [])
+                    ]
+                    if views:
+                        total_views += sum(views) // len(views)
+                        word_count += 1
+
+                # 평균 조회수 = 총합 / 단어 수
+                avg_views = total_views // word_count if word_count > 0 else 0
+                kw_item["avg_views"] = avg_views
+
+        # 조회수 기준 내림차순 정렬
+        keywords.sort(key=lambda x: x.get("avg_views", 0), reverse=True)
+        for i, kw in enumerate(keywords):
+            kw["rank"] = i + 1
+
+    except Exception:
+        logger.exception("YouTube 조회수 조회 실패")
+
+    return keywords
 
 
 def _parse_traffic(t: str) -> int:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.core.database import db
-from app.schemas.dashboard import STATUS_LABEL, STATUS_PROGRESS, ProjectStatus
+from app.schemas.dashboard import STATUS_LABEL, STATUS_PROGRESS, ProjectStatus, SimpleStatus
 
 
 async def get_recent_projects(user_id: str, limit: int = 10) -> list[dict]:
@@ -12,24 +12,45 @@ async def get_recent_projects(user_id: str, limit: int = 10) -> list[dict]:
         take=limit,
         include={"character": True},
     )
-    return [
-        {
+    if not projects:
+        return None
+
+    result = []
+    for p in projects:
+        status = p.status
+        is_valid = status in ProjectStatus._value2member_map_
+        simple = (
+            SimpleStatus.COMPLETED
+            if status == "COMPLETED"
+            else SimpleStatus.IN_PROGRESS
+        )
+
+        # 썸네일: 콘티 heroFrameUrl → 없으면 캐릭터 이미지
+        thumbnail = p.character.thumbnailUrl if p.character else ""
+        storyboard = await db.storyboard.find_first(
+            where={"userId": user_id, "characterId": p.characterId},
+            order={"createdAt": "desc"},
+        )
+        if storyboard and storyboard.heroFrameUrl:
+            thumbnail = storyboard.heroFrameUrl
+
+        result.append({
             "id": p.id,
             "title": p.title,
-            "character_id": p.characterId,
+            "character_id": p.characterId or "",
             "character_name": p.character.name if p.character else "",
-            "character_image": p.character.thumbnailUrl if p.character else "",
-            "status": p.status,
-            "status_label": STATUS_LABEL.get(ProjectStatus(p.status), "알 수 없음")
-            if p.status in ProjectStatus._value2member_map_
+            "character_image": thumbnail,
+            "status": status,
+            "simple_status": simple,
+            "status_label": STATUS_LABEL.get(ProjectStatus(status), "알 수 없음")
+            if is_valid
             else "알 수 없음",
-            "progress": STATUS_PROGRESS.get(ProjectStatus(p.status), 0)
-            if p.status in ProjectStatus._value2member_map_
+            "progress": STATUS_PROGRESS.get(ProjectStatus(status), 0)
+            if is_valid
             else 0,
             "created_at": p.createdAt.isoformat(),
-        }
-        for p in projects
-    ]
+        })
+    return result
 
 
 async def get_recent_characters(user_id: str, limit: int = 10) -> list[dict] | None:

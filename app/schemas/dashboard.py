@@ -34,6 +34,13 @@ STATUS_LABEL: dict[ProjectStatus, str] = {
 }
 
 
+class SimpleStatus(str, Enum):  # noqa: UP042
+    """단순화된 프로젝트 상태"""
+
+    IN_PROGRESS = "진행중"
+    COMPLETED = "완료"
+
+
 class ProjectItem(BaseModel):
     """프로젝트 리스트 아이템"""
 
@@ -43,6 +50,7 @@ class ProjectItem(BaseModel):
     character_name: str
     character_image: str
     status: ProjectStatus
+    simple_status: SimpleStatus
     status_label: str
     progress: int
     created_at: str
@@ -53,7 +61,8 @@ class TrendKeyword(BaseModel):
 
     rank: int
     keyword: str
-    traffic: str
+    avg_views: int = 0
+    url: str = ""
 
 
 class CreationTrendItem(BaseModel):
@@ -81,7 +90,7 @@ class RecentCharacterItem(BaseModel):
 class DashboardResponse(BaseModel):
     """대시보드 응답"""
 
-    recent_projects: list[ProjectItem]
+    recent_projects: list[ProjectItem] | None = None
     recent_characters: list[RecentCharacterItem] | None = None
     trending_keywords: list[TrendKeyword]
-    creation_trends: list[CreationTrendItem]
+    creation_trends: list[CreationTrendItem] | None = None
