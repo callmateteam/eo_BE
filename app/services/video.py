@@ -1,4 +1,4 @@
-"""영상 생성 서비스 (Pika + Runway + Veo + Mock)"""
+"""영상 생성 서비스 (Hailuo + Pika + Veo + Mock)"""
 
 from __future__ import annotations
 
@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 # Pika 폴링 설정
 _PIKA_POLL_INTERVAL = 10
 _PIKA_MAX_WAIT = 300
+
+# Hailuo 폴링 설정
+_HAILUO_POLL_INTERVAL = 8
+_HAILUO_MAX_WAIT = 360  # 최대 6분 (Standard 평균 4분)
 
 # 폴링 기본값
 _POLL_INTERVAL = 5  # 초
@@ -44,125 +48,6 @@ class VideoGenerator(ABC):
     def provider_name(self) -> str:
         """제공자 이름 (로깅/비용 추적용)"""
         return self.__class__.__name__
-
-
-class VeoVideoGenerator(VideoGenerator):
-    """Google Veo API 영상 생성기"""
-
-    def __init__(self) -> None:
-        self._api_key = settings.GOOGLE_API_KEY
-        self._model = settings.VEO_MODEL
-        self._base = "https://generativelanguage.googleapis.com"
-
-    async def generate(
-        self,
-        prompt: str,
-        *,
-        image_url: str | None = None,
-        duration: int = 5,
-        aspect_ratio: str = "9:16",
-    ) -> str:
-        """Veo API로 영상 생성 → 완료 대기 → 영상 URL 반환"""
-        url = f"{self._base}/v1beta/models/{self._model}:predictLongRunning"
-        headers = {
-            "x-goog-api-key": self._api_key,
-            "Content-Type": "application/json",
-        }
-
-        instances: list[dict] = [{"prompt": prompt}]
-        # Veo API는 현재 text-to-video만 지원 (imageUrl 미지원)
-
-        body = {
-            "instances": instances,
-            "parameters": {
-                "aspectRatio": aspect_ratio,
-                "durationSeconds": min(duration, 8),
-            },
-        }
-
-        # 429 rate limit 시 최대 3회 재시도 (30초 간격)
-        data: dict = {}
-        async with httpx.AsyncClient(timeout=30) as client:
-            for attempt in range(3):
-                resp = await client.post(url, json=body, headers=headers)
-                if resp.status_code == 429:
-                    wait = 30 * (attempt + 1)
-                    logger.warning("Veo 429 rate limit, %d초 후 재시도 (%d/3)", wait, attempt + 1)
-                    await asyncio.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                break
-            else:
-                raise RuntimeError("Veo API rate limit 초과 (3회 재시도 실패)")
-
-        op_name = data.get("name")
-        if not op_name:
-            raise RuntimeError(f"Veo 응답에 operation name 없음: {data}")
-
-        video_url = await self._poll_operation(op_name)
-        return video_url
-
-    async def _poll_operation(self, op_name: str) -> str:
-        """작업 완료까지 폴링"""
-        url = f"{self._base}/v1beta/{op_name}"
-        headers = {"x-goog-api-key": self._api_key}
-        elapsed = 0
-        async with httpx.AsyncClient(timeout=30) as client:
-            while elapsed < _MAX_WAIT:
-                await asyncio.sleep(_POLL_INTERVAL)
-                elapsed += _POLL_INTERVAL
-
-                resp = await client.get(url, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-
-                if data.get("done"):
-                    return self._extract_video_url(data)
-
-                logger.info("Veo 폴링 중: %s (%.0f초 경과)", op_name, elapsed)
-
-        raise TimeoutError(f"Veo 영상 생성 타임아웃 ({_MAX_WAIT}초): {op_name}")
-
-    def _extract_video_url(self, data: dict) -> str:
-        """완료된 operation에서 영상 URL 추출"""
-        error = data.get("error")
-        if error:
-            raise RuntimeError(f"Veo 영상 생성 실패: {error}")
-
-        response = data.get("response", {})
-
-        # Veo API 응답 구조 호환: generatedVideos 또는 generateVideoResponse
-        videos = response.get("generatedVideos", [])
-        if not videos:
-            gen_resp = response.get("generateVideoResponse", {})
-            samples = gen_resp.get("generatedSamples", [])
-            if samples:
-                videos = samples
-
-        if not videos:
-            logger.error("Veo 응답 구조: %s", data)
-            raise RuntimeError(f"Veo 응답에 영상이 없습니다: {data}")
-
-        video = videos[0].get("video", {})
-        uri = video.get("uri")
-        if not uri:
-            raise RuntimeError("Veo 영상 URI가 없습니다")
-
-        return uri
-
-    async def get_status(self, task_id: str) -> dict:
-        """작업 상태 조회"""
-        return {
-            "status": "completed",
-            "video_url": None,
-            "duration": 5,
-            "error": None,
-        }
-
-    @property
-    def provider_name(self) -> str:
-        return "Veo"
 
 
 class PikaVideoGenerator(VideoGenerator):
@@ -257,6 +142,108 @@ class PikaVideoGenerator(VideoGenerator):
         return "Pika"
 
 
+class HailuoVideoGenerator(VideoGenerator):
+    """MiniMax Hailuo image-to-video (fal.ai 경유)
+
+    - I2V-01-Live: 2D 애니 캐릭터 전용 (캐릭터 변형 최소)
+    - Hailuo-02 Standard: 범용 고품질
+    """
+
+    def __init__(self, model: str = "live") -> None:
+        self._api_key = settings.FAL_KEY
+        # live = 2D 애니 전용, 02 = 범용
+        if model == "live":
+            self._base = "https://queue.fal.run/fal-ai/minimax/video-01-live/image-to-video"
+            self._result_base = "https://queue.fal.run/fal-ai/minimax/video-01-live/image-to-video"
+        else:
+            self._base = "https://queue.fal.run/fal-ai/minimax/hailuo-02/standard/image-to-video"
+            self._result_base = "https://queue.fal.run/fal-ai/minimax/hailuo-02/standard/image-to-video"
+        self._model = model
+
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        image_url: str | None = None,
+        duration: int = 5,
+        aspect_ratio: str = "9:16",
+    ) -> str:
+        """Hailuo API로 영상 생성 → 폴링 → 영상 URL 반환"""
+        headers = {
+            "Authorization": f"Key {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        body: dict = {
+            "prompt": prompt,
+            "prompt_optimizer": True,
+        }
+
+        if image_url:
+            body["image_url"] = image_url
+
+        # Hailuo-02는 duration, resolution 지원
+        if self._model != "live":
+            body["duration"] = min(duration, 6)
+            body["resolution"] = "768P"
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(self._base, json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        request_id = data.get("request_id")
+        if not request_id:
+            raise RuntimeError(f"Hailuo 응답에 request_id 없음: {data}")
+
+        logger.info("Hailuo(%s) 요청 시작: request_id=%s", self._model, request_id)
+
+        video_url = await self._poll_result(request_id)
+        return video_url
+
+    async def _poll_result(self, request_id: str) -> str:
+        """Hailuo 작업 완료까지 폴링"""
+        status_url = f"{self._result_base}/requests/{request_id}/status"
+        result_url = f"{self._result_base}/requests/{request_id}"
+        headers = {"Authorization": f"Key {self._api_key}"}
+
+        elapsed = 0
+        async with httpx.AsyncClient(timeout=30) as client:
+            while elapsed < _HAILUO_MAX_WAIT:
+                await asyncio.sleep(_HAILUO_POLL_INTERVAL)
+                elapsed += _HAILUO_POLL_INTERVAL
+
+                resp = await client.get(status_url, headers=headers)
+                resp.raise_for_status()
+                status_data = resp.json()
+                status = status_data.get("status", "")
+
+                logger.info("Hailuo 폴링: %s (%ds)", status, elapsed)
+
+                if status == "COMPLETED":
+                    result_resp = await client.get(result_url, headers=headers)
+                    result_resp.raise_for_status()
+                    result = result_resp.json()
+                    video = result.get("video", {})
+                    url = video.get("url", "")
+                    if not url:
+                        raise RuntimeError(f"Hailuo 영상 URL 없음: {result}")
+                    return url
+
+                if status == "FAILED":
+                    raise RuntimeError(f"Hailuo 영상 생성 실패: {status_data}")
+
+        raise TimeoutError(f"Hailuo 영상 생성 타임아웃 ({_HAILUO_MAX_WAIT}초)")
+
+    async def get_status(self, task_id: str) -> dict:
+        """작업 상태 조회"""
+        return {"status": "completed", "video_url": None, "duration": 5, "error": None}
+
+    @property
+    def provider_name(self) -> str:
+        return f"Hailuo-{self._model}"
+
+
 class MockVideoGenerator(VideoGenerator):
     """개발/테스트용 Mock 영상 생성기 (딜레이 후 성공)"""
 
@@ -298,19 +285,19 @@ class MockVideoGenerator(VideoGenerator):
 def get_generator(provider: str | None = None) -> VideoGenerator:
     """제공자에 따라 적절한 VideoGenerator 반환
 
-    우선순위: Pika > Veo > Mock
+    우선순위: Hailuo-live (2D 애니 전용) > Pika > Mock
     provider가 None이면 API 키 유무로 자동 선택.
     """
     if provider == "mock":
         return MockVideoGenerator(delay_seconds=5)
+    if provider == "hailuo" or provider == "hailuo-live":
+        return HailuoVideoGenerator(model="live")
+    if provider == "hailuo-02":
+        return HailuoVideoGenerator(model="02")
     if provider == "pika":
         return PikaVideoGenerator()
-    if provider == "veo":
-        return VeoVideoGenerator()
 
-    # 자동 선택: Pika > Veo > Mock
+    # 자동 선택: Hailuo-live > Pika > Mock
     if settings.FAL_KEY:
-        return PikaVideoGenerator()
-    if settings.GOOGLE_API_KEY:
-        return VeoVideoGenerator()
+        return HailuoVideoGenerator(model="live")
     return MockVideoGenerator(delay_seconds=5)

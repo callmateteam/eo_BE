@@ -12,7 +12,7 @@ import httpx
 from app.core.database import db
 from app.core.s3 import upload_video
 from app.core.timezone import now_kst
-from app.services.prompt_optimizer import build_pika_prompt, select_best_image
+from app.services.prompt_optimizer import build_hailuo_prompt, select_best_image
 from app.services.storyboard import get_character_description
 from app.services.video import get_generator
 from app.services.video_merge import SceneInput, merge_storyboard_video
@@ -20,7 +20,7 @@ from app.services.video_merge import SceneInput, merge_storyboard_video
 logger = logging.getLogger(__name__)
 
 # 동시 영상 생성 제한 (장면 단위)
-_VIDEO_SEMAPHORE = asyncio.Semaphore(2)  # Pika는 동시 2개 가능
+_VIDEO_SEMAPHORE = asyncio.Semaphore(2)  # Hailuo 동시 2개
 
 # 장면당 예상 소요시간 (초) — 실측 데이터 없을 때 기본값
 _DEFAULT_SCENE_DURATION_ESTIMATE = 30
@@ -212,43 +212,38 @@ async def _generate_scene_video(
             # 캐릭터 정보에서 시드 데이터 추출
             char_info = await _get_character_seed_data(storyboard_id)
 
-            # Pika 프롬프트 최적화
-            pika_result = build_pika_prompt(
+            # Hailuo 프롬프트 최적화 (자연스러운 동작 키워드 자동 삽입)
+            hailuo_result = build_hailuo_prompt(
                 scene_content=scene.content,
                 image_prompt=getattr(scene, "imagePrompt", None),
                 character_name=char_info.get("name", ""),
                 world_context=char_info.get("world_context", ""),
                 art_style=char_info.get("art_style", ""),
+                series_description=char_info.get("series_description", ""),
+                secondary_character=getattr(scene, "secondaryCharacter", "") or "",
+                secondary_character_desc=getattr(scene, "secondaryCharacterDesc", "") or "",
                 bgm_mood=bgm_mood,
                 scene_order=scene.sceneOrder,
                 total_scenes=total,
                 duration=int(scene.duration),
             )
 
-            prompt = pika_result["prompt"]
+            prompt = hailuo_result["prompt"]
 
             # S3 이미지 자동 선택 (장면에 맞는 최적 포즈)
             image_url = select_best_image(
                 extra_images=char_info.get("extra_images", ""),
-                scene_type=pika_result.get("_scene_type", "default"),
+                scene_type=hailuo_result.get("_scene_type", "default"),
                 base_image_url=char_info.get("image_url", scene.imageUrl or ""),
             )
 
             # 영상 생성 → URL 반환
-            generate_kwargs: dict = {
-                "prompt": prompt,
-                "image_url": image_url,
-                "duration": int(scene.duration),
-                "aspect_ratio": "9:16",
-            }
-
-            # Pika 전용 파라미터 (PikaVideoGenerator만 지원)
-            if hasattr(generator, "provider_name") and generator.provider_name == "Pika":
-                generate_kwargs["negative_prompt"] = pika_result["negative_prompt"]
-                generate_kwargs["guidance_scale"] = pika_result["guidance_scale"]
-                generate_kwargs["motion"] = pika_result["motion"]
-
-            result_url = await generator.generate(**generate_kwargs)
+            result_url = await generator.generate(
+                prompt=prompt,
+                image_url=image_url,
+                duration=int(scene.duration),
+                aspect_ratio="9:16",
+            )
 
             # 비용 로깅
             logger.info(
@@ -371,6 +366,7 @@ async def _get_character_seed_data(storyboard_id: str) -> dict:
             "art_style": getattr(c, "artStyle", "") or "",
             "extra_images": getattr(c, "extraImages", "") or "",
             "world_context": getattr(c, "worldContext", "") or "",
+            "series_description": getattr(c, "seriesDescription", "") or "",
             "prompt_features": c.promptFeatures,
         }
 
@@ -418,11 +414,8 @@ async def _download_and_upload(
     if not video_url or not video_url.startswith("http"):
         return None
 
-    from app.core.config import settings
-
-    headers = {"x-goog-api-key": settings.GOOGLE_API_KEY}
     async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-        resp = await client.get(video_url, headers=headers)
+        resp = await client.get(video_url)
         resp.raise_for_status()
         video_bytes = resp.content
 

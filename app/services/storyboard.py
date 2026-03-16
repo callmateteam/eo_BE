@@ -32,11 +32,14 @@ Rules:
 - title/content: Korean, concise
 - duration: action=short, dialogue=longer
 - hasCharacter: true if the character appears in this scene, false otherwise
+- secondaryCharacter: name of another character in this scene (null if none). \
+Only set if the idea mentions another character by name.
 - narration: Korean TTS text for this scene. null if silent
 - narrationStyle: "character"|"narrator"|"none"
 - bgmMood: overall BGM mood (first scene only): epic/funny/calm/tense/sad/upbeat/mysterious
 
-[{"title":"","content":"","imagePrompt":"","duration":5.0,"hasCharacter":true,"narration":"","narrationStyle":"character","bgmMood":"funny"}]"""
+[{"title":"","content":"","imagePrompt":"","duration":5.0,"hasCharacter":true,\
+"secondaryCharacter":null,"narration":"","narrationStyle":"character","bgmMood":"funny"}]"""
 
 STORYBOARD_USER = """\
 캐릭터: {character_desc}
@@ -129,6 +132,7 @@ async def generate_scenes_with_gpt(
                     "imagePrompt": str(s.get("imagePrompt", ""))[:200],
                     "duration": min(max(float(s.get("duration", 5.0)), 2.0), 10.0),
                     "hasCharacter": bool(s.get("hasCharacter", True)),
+                    "secondaryCharacter": str(s.get("secondaryCharacter") or "")[:100] or None,
                     "narration": narration,
                     "narrationStyle": narration_style,
                 }
@@ -293,6 +297,59 @@ async def get_character_info(
     raise ValueError("캐릭터를 선택해주세요")
 
 
+async def get_secondary_character_description(name: str) -> str:
+    """보조 캐릭터 외형 설명 조회. DB에 있으면 promptFeatures 사용, 없으면 GPT 생성."""
+    if not name:
+        return ""
+
+    # 1. DB에서 이름으로 검색 (한글/영문 모두)
+    char = await db.character.find_first(
+        where={"OR": [{"name": {"contains": name}}, {"nameEn": {"contains": name}}]}
+    )
+    if char:
+        logger.info("보조 캐릭터 DB 매칭: %s → %s", name, char.name)
+        return char.promptFeatures or char.veoPrompt or ""
+
+    # 2. DB에 없으면 GPT로 외형 설명 생성
+    logger.info("보조 캐릭터 DB에 없음, GPT 생성: %s", name)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "temperature": 0,
+                    "max_tokens": 200,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Describe the anime/cartoon character's "
+                                "physical appearance in English for video "
+                                "generation. Include: height, build, hair "
+                                "color/style, eye color, clothing, "
+                                "distinctive features. Max 50 words. "
+                                "No personality or story, only visual."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Describe: {name}",
+                        },
+                    ],
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        logger.exception("보조 캐릭터 GPT 설명 생성 실패: %s", name)
+        return ""
+
+
 async def process_storyboard(
     storyboard_id: str,
     user_id: str,
@@ -325,7 +382,21 @@ async def process_storyboard(
 
         # Step 2: DB에 장면 저장 (30-40%)
         await notify(35, "장면 저장 중...")
+
+        # 보조 캐릭터 외형 설명 일괄 조회 (중복 제거)
+        secondary_names = {
+            s["secondaryCharacter"]
+            for s in scenes
+            if s.get("secondaryCharacter")
+        }
+        secondary_descs: dict[str, str] = {}
+        for sec_name in secondary_names:
+            desc = await get_secondary_character_description(sec_name)
+            secondary_descs[sec_name] = desc
+            logger.info("보조 캐릭터 설명: %s → %d자", sec_name, len(desc))
+
         for i, scene in enumerate(scenes):
+            sec_name = scene.get("secondaryCharacter")
             await db.storyboardscene.create(
                 data={
                     "storyboardId": storyboard_id,
@@ -335,6 +406,8 @@ async def process_storyboard(
                     "imagePrompt": scene["imagePrompt"],
                     "duration": scene["duration"],
                     "hasCharacter": scene["hasCharacter"],
+                    "secondaryCharacter": sec_name,
+                    "secondaryCharacterDesc": secondary_descs.get(sec_name or "", "") or None,
                     "narration": scene["narration"],
                     "narrationStyle": scene["narrationStyle"],
                     "imageStatus": "GENERATING",
@@ -342,118 +415,70 @@ async def process_storyboard(
             )
         await notify(40, "장면 저장 완료")
 
-        # Step 3: 히어로 프레임 기반 이미지 생성 (40-95%)
+        # Step 3: S3 원본 이미지 자동 선택 (DALL-E 제거, 비용 $0)
+        from app.services.prompt_optimizer import detect_scene_type, select_best_image
+
         db_scenes = await db.storyboardscene.find_many(
             where={"storyboardId": storyboard_id},
             order={"sceneOrder": "asc"},
         )
 
-        # 캐릭터 등장 장면과 비등장 장면 분리
-        char_scenes = [s for s in db_scenes if s.hasCharacter]
-        no_char_scenes = [s for s in db_scenes if not s.hasCharacter]
+        # 캐릭터 시드 데이터 조회 (extraImages, artStyle 등)
+        sb_for_char = await db.storyboard.find_unique(
+            where={"id": storyboard_id},
+            include={"character": True},
+        )
+        extra_images = ""
+        base_image_url = character_image_url or ""
+        if sb_for_char and sb_for_char.character:
+            c = sb_for_char.character
+            extra_images = getattr(c, "extraImages", "") or ""
+            base_image_url = c.imageUrl or base_image_url
 
-        hero_frame_bytes: bytes | None = None
+        await notify(45, "장면별 이미지 선택 중...")
 
-        # S3 원본 캐릭터 이미지를 참조용으로 다운로드
-        ref_image_bytes: bytes | None = None
-        if character_image_url:
+        for sc in db_scenes:
             try:
-                async with httpx.AsyncClient(timeout=30) as dl_client:
-                    ref_resp = await dl_client.get(character_image_url)
-                    ref_resp.raise_for_status()
-                    ref_image_bytes = ref_resp.content
-                logger.info("캐릭터 원본 이미지 다운로드 완료: %d bytes", len(ref_image_bytes))
-            except Exception:
-                logger.warning("캐릭터 원본 이미지 다운로드 실패, 텍스트만 사용")
-
-        # 3-1: 첫 번째 캐릭터 장면 → 히어로 프레임 (순차, 원본 이미지 참조)
-        if char_scenes:
-            hero_scene = char_scenes[0]
-            await notify(45, "캐릭터 히어로 프레임 생성 중...")
-            try:
-                s3_url, hero_frame_bytes = await generate_scene_image(
-                    hero_scene.imagePrompt,
-                    character_desc,
-                    user_id,
-                    reference_image_bytes=ref_image_bytes,
+                # 장면 유형 감지 → 최적 S3 이미지 자동 선택
+                scene_type = detect_scene_type(
+                    sc.content, getattr(sc, "imagePrompt", None)
+                )
+                selected_url = select_best_image(
+                    extra_images=extra_images,
+                    scene_type=scene_type,
+                    base_image_url=base_image_url,
                 )
                 await db.storyboardscene.update(
-                    where={"id": hero_scene.id},
-                    data={"imageUrl": s3_url, "imageStatus": "COMPLETED"},
+                    where={"id": sc.id},
+                    data={"imageUrl": selected_url, "imageStatus": "COMPLETED"},
                 )
-                # 히어로 프레임 URL 저장
+                logger.info(
+                    "장면 %d: type=%s → %s",
+                    sc.sceneOrder, scene_type, selected_url.split("/")[-1],
+                )
+            except Exception:
+                logger.exception("장면 이미지 선택 실패: %s", sc.id)
+                await db.storyboardscene.update(
+                    where={"id": sc.id},
+                    data={
+                        "imageUrl": base_image_url,
+                        "imageStatus": "COMPLETED",
+                    },
+                )
+
+        # 히어로 프레임 = 첫 장면 이미지
+        if db_scenes:
+            first_scene = await db.storyboardscene.find_first(
+                where={"storyboardId": storyboard_id},
+                order={"sceneOrder": "asc"},
+            )
+            if first_scene and first_scene.imageUrl:
                 await db.storyboard.update(
                     where={"id": storyboard_id},
-                    data={"heroFrameUrl": s3_url},
-                )
-            except Exception:
-                logger.exception("히어로 프레임 생성 실패: %s", hero_scene.id)
-                await db.storyboardscene.update(
-                    where={"id": hero_scene.id},
-                    data={"imageStatus": "FAILED"},
+                    data={"heroFrameUrl": first_scene.imageUrl},
                 )
 
-        # 원본 참조 이미지 메모리 해제 (히어로 프레임으로 대체됨)
-        del ref_image_bytes
-
-        await notify(
-            55,
-            f"나머지 {len(db_scenes) - 1}개 장면 이미지 생성 중...",
-        )
-
-        # 3-2: 나머지 장면 병렬 생성
-        async def _gen_char_scene(sc: object) -> None:
-            """캐릭터 등장 장면 — 히어로 프레임 참조"""
-            try:
-                s3_url, _ = await generate_scene_image(
-                    sc.imagePrompt,
-                    character_desc,
-                    user_id,
-                    reference_image_bytes=hero_frame_bytes,
-                )
-                await db.storyboardscene.update(
-                    where={"id": sc.id},
-                    data={"imageUrl": s3_url, "imageStatus": "COMPLETED"},
-                )
-            except Exception:
-                logger.exception("장면 이미지 생성 실패: %s", sc.id)
-                await db.storyboardscene.update(
-                    where={"id": sc.id},
-                    data={"imageStatus": "FAILED"},
-                )
-
-        async def _gen_no_char_scene(sc: object) -> None:
-            """캐릭터 미등장 장면 — 캐릭터 설명 없이 생성 (토큰 절약)"""
-            try:
-                prompt_no_char = (
-                    f"Opening shot: {sc.imagePrompt}. Single frame, cinematic still, high detail."
-                )[:4000]
-                img_data = await _generate_new(prompt_no_char)
-                s3_url = await asyncio.to_thread(
-                    upload_image,
-                    img_data,
-                    user_id,
-                    content_type="image/png",
-                    folder="storyboard-scenes",
-                )
-                await db.storyboardscene.update(
-                    where={"id": sc.id},
-                    data={"imageUrl": s3_url, "imageStatus": "COMPLETED"},
-                )
-            except Exception:
-                logger.exception("장면 이미지 생성 실패: %s", sc.id)
-                await db.storyboardscene.update(
-                    where={"id": sc.id},
-                    data={"imageStatus": "FAILED"},
-                )
-
-        # 히어로 프레임 제외 나머지 캐릭터 장면 + 비캐릭터 장면 병렬
-        remaining_char = char_scenes[1:] if char_scenes else []
-        tasks = [_gen_char_scene(sc) for sc in remaining_char] + [
-            _gen_no_char_scene(sc) for sc in no_char_scenes
-        ]
-        if tasks:
-            await asyncio.gather(*tasks)
+        await notify(55, "이미지 선택 완료")
 
         # Step 4: TTS 나레이션 생성 (90-95%)
         await notify(90, "나레이션 음성 생성 중...")

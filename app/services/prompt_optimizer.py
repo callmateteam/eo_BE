@@ -1,13 +1,12 @@
-"""Pika v2.2 프롬프트 최적화 엔진
+"""Hailuo I2V 프롬프트 최적화 엔진
 
-S3 캐릭터 이미지 + 시드 데이터 → Pika image-to-video 최적 프롬프트 자동 생성.
-GPT가 사용자 아이디어를 Pika 최적화 프롬프트로 변환하는 시스템.
+S3 캐릭터 이미지 + 시드 데이터 → Hailuo image-to-video 최적 프롬프트 자동 생성.
 
 핵심 규칙:
 1. 이미지에 있는 것은 반복하지 않음 (동작/배경만 명시)
 2. 80-120 단어 이내
 3. 동작 1-2개만 (한 프롬프트에 너무 많은 행동 금지)
-4. negative prompt로 손/변형 방지
+4. 자연스러운 관절/동작 키워드 필수 (로봇 동작 방지)
 5. 배경을 첫 문장에 명시
 """
 
@@ -17,71 +16,44 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# ── Pika 파라미터 프리셋 (장면 유형별) ──
+# ── 장면 유형별 자연스러운 동작 보강 키워드 ──
 
-PIKA_PRESETS: dict[str, dict] = {
-    "cooking": {
-        "guidance_scale": 16,
-        "motion": 1.5,
-        "negative": (
-            "deformed hands, extra fingers, warped hands, "
-            "distorted knife, melting food, jitter, flicker, "
-            "morphing, text, letters, 3D render"
-        ),
-    },
-    "eating": {
-        "guidance_scale": 16,
-        "motion": 1.5,
-        "negative": (
-            "deformed hands, extra fingers, warped face, "
-            "unnatural mouth, food distortion, jitter, flicker, "
-            "morphing, text, letters, 3D render"
-        ),
-    },
-    "walking": {
-        "guidance_scale": 15,
-        "motion": 2.0,
-        "negative": (
-            "unnatural gait, floating feet, jitter, flicker, "
-            "morphing, extra limbs, text, letters, 3D render"
-        ),
-    },
-    "action": {
-        "guidance_scale": 15,
-        "motion": 3.0,
-        "negative": (
-            "warped weapons, extra limbs, unnatural physics, "
-            "jitter, flicker, morphing, text, letters, 3D render"
-        ),
-    },
-    "sitting": {
-        "guidance_scale": 16,
-        "motion": 1.0,
-        "negative": (
-            "unnatural posture, deformed hands, warped face, "
-            "jitter, flicker, morphing, text, letters, 3D render"
-        ),
-    },
-    "talking": {
-        "guidance_scale": 14,
-        "motion": 1.0,
-        "negative": (
-            "unnatural lip movement, warped face, off-model, "
-            "jitter, flicker, morphing, text, letters, 3D render"
-        ),
-    },
-    "default": {
-        "guidance_scale": 16,
-        "motion": 1.5,
-        "negative": (
-            "deformed hands, extra fingers, warped face, "
-            "off-model, jitter, flicker, morphing, "
-            "text, letters, watermark, 3D render"
-        ),
-    },
+MOTION_ENHANCERS: dict[str, str] = {
+    "cooking": (
+        "smooth rhythmic chopping motion, natural arm swing, "
+        "elbow bending fluidly, wrist rotating naturally, "
+        "body slightly swaying with each chop"
+    ),
+    "eating": (
+        "natural chewing motion, smooth hand-to-mouth movement, "
+        "gentle head nodding, relaxed body posture, organic movement"
+    ),
+    "walking": (
+        "natural walking gait with weight shift, "
+        "arms swinging naturally, smooth stride, "
+        "body momentum flowing forward"
+    ),
+    "action": (
+        "dynamic fluid motion with natural momentum, "
+        "smooth weight transfer between poses, "
+        "organic follow-through on each movement"
+    ),
+    "sitting": (
+        "gentle breathing motion, subtle body sway, "
+        "natural hand gestures, relaxed organic posture"
+    ),
+    "talking": (
+        "natural lip movement, subtle head tilts, "
+        "gentle hand gestures while speaking, "
+        "lifelike body language"
+    ),
+    "default": (
+        "fluid natural motion, smooth weight shift, "
+        "organic movement, lifelike animation"
+    ),
 }
 
-# ── 동작 키워드 → 프리셋 매핑 ──
+# ── 동작 키워드 → 장면 유형 매핑 ──
 
 _ACTION_KEYWORDS: dict[str, str] = {
     "cook": "cooking",
@@ -111,6 +83,7 @@ _ACTION_KEYWORDS: dict[str, str] = {
     "공격": "action",
     "sword": "action",
     "kick": "action",
+    "punch": "action",
     "sit": "sitting",
     "앉": "sitting",
     "study": "sitting",
@@ -154,11 +127,6 @@ def detect_scene_type(scene_content: str, image_prompt: str | None = None) -> st
     return "default"
 
 
-def get_pika_preset(scene_type: str) -> dict:
-    """장면 유형에 맞는 Pika 파라미터 프리셋 반환"""
-    return PIKA_PRESETS.get(scene_type, PIKA_PRESETS["default"])
-
-
 def select_best_image(
     extra_images: str,
     scene_type: str,
@@ -182,12 +150,12 @@ def select_best_image(
 
     # 장면 유형별 선호 이미지 매핑
     preferred: dict[str, list[str]] = {
-        "cooking": ["fullbody", "action", "side"],
+        "cooking": ["cooking", "fullbody", "action", "side"],
         "eating": ["eating", "face", "side"],
-        "walking": ["fullbody", "side", "action"],
+        "walking": ["fullbody", "walking", "side", "action"],
         "action": ["action", "fullbody", "side"],
-        "sitting": ["face", "fullbody", "side"],
-        "talking": ["face", "fullbody", "side"],
+        "sitting": ["sitting", "face", "fullbody", "side"],
+        "talking": ["face", "talking", "fullbody", "side"],
         "default": ["fullbody", "face", "side"],
     }
 
@@ -204,36 +172,38 @@ def select_best_image(
     return base_image_url
 
 
-def build_pika_prompt(
+def build_hailuo_prompt(
     *,
     scene_content: str,
     image_prompt: str | None = None,
     character_name: str = "",
     world_context: str = "",
     art_style: str = "",
+    series_description: str = "",
+    secondary_character: str = "",
+    secondary_character_desc: str = "",
     bgm_mood: str | None = None,
     scene_order: int = 1,
     total_scenes: int = 1,
     duration: int = 5,
 ) -> dict:
-    """Pika v2.2 image-to-video 최적화 프롬프트 생성
+    """Hailuo I2V image-to-video 최적화 프롬프트 생성
+
+    로봇 동작 방지를 위해 자연스러운 관절/동작 키워드를 자동 삽입.
 
     Returns:
         {
             "prompt": str,
-            "negative_prompt": str,
-            "guidance_scale": float,
-            "motion": float,
+            "_scene_type": str,
         }
     """
     scene_type = detect_scene_type(scene_content, image_prompt)
-    preset = get_pika_preset(scene_type)
+    motion_enhancer = MOTION_ENHANCERS.get(scene_type, MOTION_ENHANCERS["default"])
 
     parts: list[str] = []
 
     # 1. 배경/세계관 (첫 문장에 - 흰 배경 방지)
     if world_context:
-        # 세계관에서 배경 키워드 추출
         parts.append(f"In {world_context.split(',')[0].strip()}")
 
     # 2. 동작 (이미지에 있는 것은 반복하지 않음 - 동작만)
@@ -242,7 +212,16 @@ def build_pika_prompt(
     else:
         parts.append(scene_content)
 
-    # 3. 카메라
+    # 2-1. 보조 캐릭터가 있으면 외형 설명 삽입
+    if secondary_character and secondary_character_desc:
+        parts.append(
+            f"Together with {secondary_character}: {secondary_character_desc}"
+        )
+
+    # 3. 자연스러운 동작 보강 (로봇 동작 방지 핵심)
+    parts.append(motion_enhancer)
+
+    # 4. 카메라 (Hailuo는 [] 형식 카메라 지원)
     if scene_order == 1:
         camera = _CAMERA_BY_POSITION["first"]
     elif scene_order == total_scenes:
@@ -251,14 +230,14 @@ def build_pika_prompt(
         camera = _CAMERA_BY_POSITION["middle"]
     parts.append(camera)
 
-    # 4. 조명
+    # 5. 조명
     lighting = _MOOD_LIGHTING.get(bgm_mood or "", "warm natural lighting")
     parts.append(lighting)
 
-    # 5. 아트 스타일 (2D 애니 변형 방지)
+    # 6. 아트 스타일 + 일관성
     if art_style:
         parts.append(art_style)
-    parts.append("consistent character throughout, no morphing, no text, no letters")
+    parts.append("consistent character throughout, smooth animation, no morphing, no text")
 
     # 조합 (120 단어 이내로 제한)
     prompt = ". ".join(p for p in parts if p)
@@ -269,7 +248,7 @@ def build_pika_prompt(
         prompt = " ".join(words[:120])
 
     logger.info(
-        "Pika 프롬프트: scene=%d, type=%s, words=%d",
+        "Hailuo 프롬프트: scene=%d, type=%s, words=%d",
         scene_order,
         scene_type,
         len(prompt.split()),
@@ -277,36 +256,9 @@ def build_pika_prompt(
 
     return {
         "prompt": prompt,
-        "negative_prompt": preset["negative"],
-        "guidance_scale": preset["guidance_scale"],
-        "motion": preset["motion"],
         "_scene_type": scene_type,
     }
 
 
-# ── GPT 시스템 프롬프트 (콘티 생성 시 Pika 최적화 프롬프트도 함께 생성) ──
-
-PIKA_PROMPT_SYSTEM = (
-    "You are an expert AI video prompt engineer for Pika v2.2 image-to-video.\n"
-    "Generate optimized English video prompts from Korean scene descriptions.\n\n"
-    "CRITICAL RULES:\n"
-    "1. DO NOT describe the character appearance (reference image handles this)\n"
-    "2. ONLY describe: action, background/setting, camera, lighting, mood\n"
-    "3. Start with SETTING/BACKGROUND (prevents white background)\n"
-    "4. Use specific action verbs (gripping, chopping - not cooking)\n"
-    "5. Anchor hands to objects (right hand gripping knife handle)\n"
-    "6. ONE action per prompt (never stack multiple actions)\n"
-    "7. Keep under 80 words\n"
-    "8. Use cinematic language (medium shot, tracking, golden hour)\n"
-    "9. NEVER include text/letters/words in the scene\n"
-    "10. Maintain 2D anime style - add cel-shaded anime style\n\n"
-    "STRUCTURE: [Setting]. [Action with hand positions]. "
-    "[Camera]. [Lighting]. [Style], consistent character, no morphing.\n\n"
-    "EXAMPLE:\n"
-    'Input: "루피가 해적선에서 요리하는 장면"\n'
-    'Output: "Inside warm wooden pirate ship galley with copper pots '
-    "on walls. Character chops spring greens on cutting board, "
-    "right hand gripping knife, left hand pressing vegetables. "
-    "Medium shot, gentle drift right. Warm golden light. "
-    'Anime cel-shaded, consistent character, no morphing, no text."'
-)
+# 하위 호환: Pika용 함수를 Hailuo용으로 리다이렉트
+build_pika_prompt = build_hailuo_prompt
