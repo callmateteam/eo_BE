@@ -48,7 +48,7 @@ async def _fetch_google_trends() -> list[dict]:
     ht_ns = "https://trends.google.com/trending/rss"
 
     results: list[dict] = []
-    for idx, item in enumerate(items):
+    for item in items:
         title = item.findtext("title", "").strip()
         traffic = item.findtext(f"{{{ht_ns}}}approx_traffic", "").strip()
 

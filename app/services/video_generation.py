@@ -12,7 +12,7 @@ import httpx
 from app.core.database import db
 from app.core.s3 import upload_video
 from app.core.timezone import now_kst
-from app.services.prompt_optimizer import optimize_scene_prompt
+from app.services.prompt_optimizer import build_pika_prompt, select_best_image
 from app.services.storyboard import get_character_description
 from app.services.video import get_generator
 from app.services.video_merge import SceneInput, merge_storyboard_video
@@ -20,7 +20,7 @@ from app.services.video_merge import SceneInput, merge_storyboard_video
 logger = logging.getLogger(__name__)
 
 # 동시 영상 생성 제한 (장면 단위)
-_VIDEO_SEMAPHORE = asyncio.Semaphore(1)  # Veo rate limit 대응: 순차 1개씩
+_VIDEO_SEMAPHORE = asyncio.Semaphore(2)  # Pika는 동시 2개 가능
 
 # 장면당 예상 소요시간 (초) — 실측 데이터 없을 때 기본값
 _DEFAULT_SCENE_DURATION_ESTIMATE = 30
@@ -97,9 +97,7 @@ async def process_storyboard_videos(
         await asyncio.gather(*tasks, return_exceptions=True)
 
         # 최종 상태 확인
-        updated_scenes = await db.storyboardscene.find_many(
-            where={"storyboardId": storyboard_id}
-        )
+        updated_scenes = await db.storyboardscene.find_many(where={"storyboardId": storyboard_id})
         all_failed = all(s.videoStatus == "FAILED" for s in updated_scenes)
 
         if all_failed:
@@ -108,21 +106,30 @@ async def process_storyboard_videos(
                 data={"status": "FAILED"},
             )
             await _send_progress(
-                storyboard_id, updated_scenes, total, total,
-                start_time, completed_durations, progress_callback,
+                storyboard_id,
+                updated_scenes,
+                total,
+                total,
+                start_time,
+                completed_durations,
+                progress_callback,
                 terminal=True,
             )
             return
 
         # 성공한 장면이 있으면 최종 합본 영상 생성
         await _send_progress(
-            storyboard_id, updated_scenes, total, total,
-            start_time, completed_durations, progress_callback,
+            storyboard_id,
+            updated_scenes,
+            total,
+            total,
+            start_time,
+            completed_durations,
+            progress_callback,
         )
 
         completed_scenes = [
-            s for s in updated_scenes
-            if s.videoStatus == "COMPLETED" and s.videoUrl
+            s for s in updated_scenes if s.videoStatus == "COMPLETED" and s.videoUrl
         ]
 
         if completed_scenes:
@@ -163,12 +170,15 @@ async def process_storyboard_videos(
             )
 
         # 최종 진행률 전송
-        final_scenes = await db.storyboardscene.find_many(
-            where={"storyboardId": storyboard_id}
-        )
+        final_scenes = await db.storyboardscene.find_many(where={"storyboardId": storyboard_id})
         await _send_progress(
-            storyboard_id, final_scenes, total, total,
-            start_time, completed_durations, progress_callback,
+            storyboard_id,
+            final_scenes,
+            total,
+            total,
+            start_time,
+            completed_durations,
+            progress_callback,
             terminal=True,
         )
 
@@ -196,34 +206,49 @@ async def _generate_scene_video(
     scene_start = time.monotonic()
 
     async with _VIDEO_SEMAPHORE:
-        # Veo rate limit 방지: 장면 순서에 따라 딜레이
-        if scene.sceneOrder > 1:
-            delay = (scene.sceneOrder - 1) * 15
-            logger.info("Veo rate limit 방지: 장면%d, %d초 대기", scene.sceneOrder, delay)
-            await asyncio.sleep(delay)
-
         try:
             generator = get_generator()
 
-            # 프롬프트 최적화 (가성비 극대화)
-            prompt = optimize_scene_prompt(
+            # 캐릭터 정보에서 시드 데이터 추출
+            char_info = await _get_character_seed_data(storyboard_id)
+
+            # Pika 프롬프트 최적화
+            pika_result = build_pika_prompt(
                 scene_content=scene.content,
-                character_desc=char_desc,
                 image_prompt=getattr(scene, "imagePrompt", None),
-                has_character=getattr(scene, "hasCharacter", True),
+                character_name=char_info.get("name", ""),
+                world_context=char_info.get("world_context", ""),
+                art_style=char_info.get("art_style", ""),
                 bgm_mood=bgm_mood,
                 scene_order=scene.sceneOrder,
                 total_scenes=total,
                 duration=int(scene.duration),
             )
 
-            # 영상 생성 → URL 반환
-            result_url = await generator.generate(
-                prompt=prompt,
-                image_url=scene.imageUrl,
-                duration=int(scene.duration),
-                aspect_ratio="9:16",
+            prompt = pika_result["prompt"]
+
+            # S3 이미지 자동 선택 (장면에 맞는 최적 포즈)
+            image_url = select_best_image(
+                extra_images=char_info.get("extra_images", ""),
+                scene_type=pika_result.get("_scene_type", "default"),
+                base_image_url=char_info.get("image_url", scene.imageUrl or ""),
             )
+
+            # 영상 생성 → URL 반환
+            generate_kwargs: dict = {
+                "prompt": prompt,
+                "image_url": image_url,
+                "duration": int(scene.duration),
+                "aspect_ratio": "9:16",
+            }
+
+            # Pika 전용 파라미터 (PikaVideoGenerator만 지원)
+            if hasattr(generator, "provider_name") and generator.provider_name == "Pika":
+                generate_kwargs["negative_prompt"] = pika_result["negative_prompt"]
+                generate_kwargs["guidance_scale"] = pika_result["guidance_scale"]
+                generate_kwargs["motion"] = pika_result["motion"]
+
+            result_url = await generator.generate(**generate_kwargs)
 
             # 비용 로깅
             logger.info(
@@ -235,9 +260,7 @@ async def _generate_scene_video(
             )
 
             # 영상 URL → S3 업로드
-            video_url = await _download_and_upload(
-                result_url, user_id
-            )
+            video_url = await _download_and_upload(result_url, user_id)
 
             await db.storyboardscene.update(
                 where={"id": scene.id},
@@ -267,9 +290,7 @@ async def _generate_scene_video(
 
         # 진행률 업데이트
         done_count = len(completed_durations)
-        updated_scenes = await db.storyboardscene.find_many(
-            where={"storyboardId": storyboard_id}
-        )
+        updated_scenes = await db.storyboardscene.find_many(where={"storyboardId": storyboard_id})
         await _send_progress(
             storyboard_id,
             updated_scenes,
@@ -314,14 +335,10 @@ async def _send_progress(
     status = "VIDEO_GENERATING"
     final_video_url = None
     if terminal:
-        all_failed = all(
-            item["video_status"] == "FAILED" for item in scene_items
-        )
+        all_failed = all(item["video_status"] == "FAILED" for item in scene_items)
         status = "FAILED" if all_failed else "VIDEO_READY"
         # 최종 합본 URL 조회
-        sb = await db.storyboard.find_unique(
-            where={"id": storyboard_id}
-        )
+        sb = await db.storyboard.find_unique(where={"id": storyboard_id})
         if sb:
             final_video_url = sb.finalVideoUrl
 
@@ -335,6 +352,40 @@ async def _send_progress(
     }
 
     await callback(msg)
+
+
+async def _get_character_seed_data(storyboard_id: str) -> dict:
+    """스토리보드의 캐릭터 시드 데이터(artStyle, extraImages, worldContext 등) 조회"""
+    sb = await db.storyboard.find_unique(
+        where={"id": storyboard_id},
+        include={"character": True, "customCharacter": True},
+    )
+    if not sb:
+        return {}
+
+    if sb.character:
+        c = sb.character
+        return {
+            "name": c.name,
+            "image_url": c.imageUrl,
+            "art_style": getattr(c, "artStyle", "") or "",
+            "extra_images": getattr(c, "extraImages", "") or "",
+            "world_context": getattr(c, "worldContext", "") or "",
+            "prompt_features": c.promptFeatures,
+        }
+
+    if sb.customCharacter:
+        cc = sb.customCharacter
+        return {
+            "name": cc.name,
+            "image_url": cc.imageUrl1,
+            "art_style": "",
+            "extra_images": "",
+            "world_context": "",
+            "prompt_features": getattr(cc, "veoPrompt", "") or cc.description,
+        }
+
+    return {}
 
 
 def _estimate_remaining(
@@ -375,7 +426,5 @@ async def _download_and_upload(
         resp.raise_for_status()
         video_bytes = resp.content
 
-    s3_url = await asyncio.to_thread(
-        upload_video, video_bytes, user_id
-    )
+    s3_url = await asyncio.to_thread(upload_video, video_bytes, user_id)
     return s3_url

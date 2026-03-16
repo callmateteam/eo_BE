@@ -337,9 +337,7 @@ async def regenerate_scene_image(
     진행률은 WebSocket(`/api/storyboards/ws/scenes/{scene_id}/image`)으로 확인 가능합니다.
     """
     try:
-        await get_scene_for_regenerate(
-            storyboard_id, scene_id, current_user["id"]
-        )
+        await get_scene_for_regenerate(storyboard_id, scene_id, current_user["id"])
     except ValueError as e:
         msg = str(e)
         if "이미 이미지를 생성" in msg:

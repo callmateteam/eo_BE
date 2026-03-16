@@ -20,12 +20,12 @@ async def get_recent_projects(user_id: str, limit: int = 10) -> list[dict]:
             "character_name": p.character.name if p.character else "",
             "character_image": p.character.thumbnailUrl if p.character else "",
             "status": p.status,
-            "status_label": STATUS_LABEL.get(
-                ProjectStatus(p.status), "알 수 없음"
-            ) if p.status in ProjectStatus._value2member_map_ else "알 수 없음",
-            "progress": STATUS_PROGRESS.get(
-                ProjectStatus(p.status), 0
-            ) if p.status in ProjectStatus._value2member_map_ else 0,
+            "status_label": STATUS_LABEL.get(ProjectStatus(p.status), "알 수 없음")
+            if p.status in ProjectStatus._value2member_map_
+            else "알 수 없음",
+            "progress": STATUS_PROGRESS.get(ProjectStatus(p.status), 0)
+            if p.status in ProjectStatus._value2member_map_
+            else 0,
             "created_at": p.createdAt.isoformat(),
         }
         for p in projects

@@ -27,7 +27,8 @@ Rules:
 - Total ≤ 60s, each scene 3-10s
 - Output ONLY valid JSON array
 - 3-5 scenes (strictly, never more than 5)
-- imagePrompt: English, max 40 words. Must describe: (1) character action, (2) specific background/location matching the scene context, (3) specific objects/food/props with detail. NEVER include text/letters/words. Use symbols or gestures instead
+- imagePrompt: English, max 40 words. Describe: (1) character action, \
+(2) background/location, (3) objects/props. NO text/letters/words
 - title/content: Korean, concise
 - duration: action=short, dialogue=longer
 - hasCharacter: true if the character appears in this scene, false otherwise
@@ -249,7 +250,10 @@ class CharacterInfo:
     """캐릭터 설명 + 음성 설정 + 원본 이미지 URL"""
 
     def __init__(
-        self, description: str, voice_id: str, voice_style: str,
+        self,
+        description: str,
+        voice_id: str,
+        voice_style: str,
         image_url: str | None = None,
     ) -> None:
         self.description = description
@@ -368,7 +372,9 @@ async def process_storyboard(
             await notify(45, "캐릭터 히어로 프레임 생성 중...")
             try:
                 s3_url, hero_frame_bytes = await generate_scene_image(
-                    hero_scene.imagePrompt, character_desc, user_id,
+                    hero_scene.imagePrompt,
+                    character_desc,
+                    user_id,
                     reference_image_bytes=ref_image_bytes,
                 )
                 await db.storyboardscene.update(
@@ -731,9 +737,7 @@ async def get_storyboard_for_video(
     scenes = record.scenes or []
     incomplete = [s for s in scenes if s.imageStatus != "COMPLETED"]
     if incomplete:
-        raise ValueError(
-            f"{len(incomplete)}개 장면의 이미지가 아직 완성되지 않았습니다"
-        )
+        raise ValueError(f"{len(incomplete)}개 장면의 이미지가 아직 완성되지 않았습니다")
 
     return record
 
@@ -758,9 +762,7 @@ async def get_storyboard_status(
         "id": storyboard_id,
         "progress": max(progress, 0),
         "step": (
-            "완료"
-            if status == "READY"
-            else ("생성 중" if status == "GENERATING" else "실패")
+            "완료" if status == "READY" else ("생성 중" if status == "GENERATING" else "실패")
         ),
         "status": status,
     }
@@ -818,9 +820,7 @@ async def get_scene_image_status(
 
     img_status = scene.imageStatus
     progress = (
-        100
-        if img_status == "COMPLETED"
-        else (0 if img_status in ("GENERATING", "PENDING") else -1)
+        100 if img_status == "COMPLETED" else (0 if img_status in ("GENERATING", "PENDING") else -1)
     )
     return {
         "id": scene_id,

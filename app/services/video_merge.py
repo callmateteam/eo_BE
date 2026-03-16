@@ -165,9 +165,7 @@ async def merge_storyboard_video(
         await notify(35, "영상 합성 중...")
 
         # 4) FFmpeg 합성
-        output_path = os.path.join(
-            tmpdir, f"final_{uuid.uuid4().hex}.mp4"
-        )
+        output_path = os.path.join(tmpdir, f"final_{uuid.uuid4().hex}.mp4")
 
         # 4a) 영상 concat 목록
         concat_list = os.path.join(tmpdir, "concat.txt")
@@ -179,10 +177,16 @@ async def merge_storyboard_video(
         # 먼저 영상만 concat
         concat_video = os.path.join(tmpdir, "concat.mp4")
         concat_cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", concat_list,
-            "-c", "copy",
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list,
+            "-c",
+            "copy",
             concat_video,
         ]
         await _run_ffmpeg(concat_cmd)
@@ -207,7 +211,9 @@ async def merge_storyboard_video(
             await notify(60, "BGM 믹싱 중...")
             mixed_video = os.path.join(tmpdir, "mixed.mp4")
             bgm_cmd = _build_bgm_mix_cmd(
-                tts_mixed, bgm_path, mixed_video,
+                tts_mixed,
+                bgm_path,
+                mixed_video,
                 has_tts=bool(audio_files),
             )
             await _run_ffmpeg(bgm_cmd)
@@ -217,15 +223,15 @@ async def merge_storyboard_video(
         await notify(70, "자막 입히는 중...")
 
         # 4d) 자막 번인 (나레이션이 있는 경우만)
-        has_subs = any(
-            s.narration and s.narration_style != "none"
-            for s in sorted_scenes
-        )
+        has_subs = any(s.narration and s.narration_style != "none" for s in sorted_scenes)
         if has_subs:
             sub_cmd = [
-                "ffmpeg", "-y",
-                "-i", mixed_video,
-                "-vf", (
+                "ffmpeg",
+                "-y",
+                "-i",
+                mixed_video,
+                "-vf",
+                (
                     f"subtitles={srt_path}"
                     ":force_style='"
                     "FontName=NanumGothic,"
@@ -236,20 +242,28 @@ async def merge_storyboard_video(
                     "Alignment=2,"
                     "MarginV=30'"
                 ),
-                "-c:a", "copy",
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-movflags", "+faststart",
+                "-c:a",
+                "copy",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-movflags",
+                "+faststart",
                 output_path,
             ]
             await _run_ffmpeg(sub_cmd)
         else:
             # 자막 없으면 faststart만 적용
             fs_cmd = [
-                "ffmpeg", "-y",
-                "-i", mixed_video,
-                "-c", "copy",
-                "-movflags", "+faststart",
+                "ffmpeg",
+                "-y",
+                "-i",
+                mixed_video,
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
                 output_path,
             ]
             await _run_ffmpeg(fs_cmd)
@@ -299,9 +313,7 @@ def _build_audio_mix_cmd(
     for ffmpeg_idx, _, delay in audio_inputs:
         delay_ms = int(delay * 1000)
         label = f"a{ffmpeg_idx}"
-        filters.append(
-            f"[{ffmpeg_idx}:a]adelay={delay_ms}|{delay_ms}[{label}]"
-        )
+        filters.append(f"[{ffmpeg_idx}:a]adelay={delay_ms}|{delay_ms}[{label}]")
         mix_inputs.append(f"[{label}]")
 
     # 원본 비디오 오디오 (있으면) + TTS 믹스
@@ -310,15 +322,23 @@ def _build_audio_mix_cmd(
     filters.append(f"{mix_str}amix=inputs={n}:normalize=0[aout]")
 
     filter_complex = ";".join(filters)
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "0:v",
-        "-map", "[aout]",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        output_path,
-    ])
+    cmd.extend(
+        [
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "0:v",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            output_path,
+        ]
+    )
     return cmd
 
 
@@ -360,16 +380,26 @@ def _build_bgm_mix_cmd(
         )
 
     return [
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-stream_loop", "-1",
-        "-i", bgm_path,
-        "-filter_complex", fc,
-        "-map", "0:v",
-        "-map", "[aout]",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_path,
+        "-stream_loop",
+        "-1",
+        "-i",
+        bgm_path,
+        "-filter_complex",
+        fc,
+        "-map",
+        "0:v",
+        "-map",
+        "[aout]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
         "-shortest",
         output_path,
     ]

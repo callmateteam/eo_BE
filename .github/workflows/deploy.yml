@@ -49,6 +49,8 @@ jobs:
             GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
             COOKIE_SECURE=${{ secrets.COOKIE_SECURE }}
             COOKIE_SAMESITE=${{ secrets.COOKIE_SAMESITE }}
+            FAL_KEY=${{ secrets.FAL_KEY }}
+            RUNWAY_API_KEY=${{ secrets.RUNWAY_API_KEY }}
             ENVEOF
             # heredoc 앞 공백 제거
             sed -i 's/^            //' .env

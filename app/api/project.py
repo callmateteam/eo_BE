@@ -89,13 +89,9 @@ async def get_project(
     current_user: dict = Depends(get_current_user),
 ) -> ProjectDetailResponse:
     """프로젝트 상세 조회 (본인 소유만)"""
-    record = await svc_get_project(
-        project_id=project_id, user_id=current_user["id"]
-    )
+    record = await svc_get_project(project_id=project_id, user_id=current_user["id"])
     if not record:
-        raise HTTPException(
-            status_code=404, detail="프로젝트를 찾을 수 없습니다"
-        )
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
     return ProjectDetailResponse(**project_to_item(record))
 
 
@@ -113,10 +109,6 @@ async def delete_project(
     current_user: dict = Depends(get_current_user),
 ) -> None:
     """프로젝트 삭제 (본인 소유만)"""
-    deleted = await svc_delete_project(
-        project_id=project_id, user_id=current_user["id"]
-    )
+    deleted = await svc_delete_project(project_id=project_id, user_id=current_user["id"])
     if not deleted:
-        raise HTTPException(
-            status_code=404, detail="프로젝트를 찾을 수 없습니다"
-        )
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")

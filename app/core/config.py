@@ -39,9 +39,13 @@ class Settings(BaseSettings):
     # OpenAI (GPT-4o Vision - 커스텀 캐릭터 분석)
     OPENAI_API_KEY: str = ""
 
-    # Google Veo (영상 생성)
+    # Google Veo (영상 생성 - 비활성)
     GOOGLE_API_KEY: str = ""
     VEO_MODEL: str = "veo-2.0-generate-001"
+
+    # Pika (fal.ai 경유 영상 생성)
+    FAL_KEY: str = ""
+    RUNWAY_API_KEY: str = ""
 
     # S3
     S3_BUCKET: str = ""
