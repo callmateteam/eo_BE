@@ -159,6 +159,12 @@ async def create_storyboard(
     )
     record_id: str = result["id"]
 
+    # 프로젝트에 스토리보드 즉시 연결 (실패해도 관계 유지)
+    if req.project_id:
+        from app.services.project import link_storyboard
+
+        await link_storyboard(req.project_id, record_id)
+
     # 백그라운드 태스크 시작
     cb = _make_progress_callback(record_id)
     task = asyncio.create_task(
@@ -261,7 +267,7 @@ async def get_storyboard(
         custom_character_id=record.customCharacterId,
         project_id=project_id,
         status=record.status,
-        error_msg="생성에 실패했습니다" if record.errorMsg else None,
+        error_msg=record.errorMsg,
         bgm_mood=record.bgmMood,
         final_video_url=record.finalVideoUrl,
         scenes=scenes,

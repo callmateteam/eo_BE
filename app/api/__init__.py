@@ -11,6 +11,7 @@ from app.api.storyboard import router as storyboard_router
 from app.api.video import router as video_router
 from app.api.video_edit import router as video_edit_router
 from app.api.ws import router as ws_router
+from app.api.youtube import router as youtube_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -22,6 +23,7 @@ router.include_router(storyboard_router)
 router.include_router(video_router)
 router.include_router(video_edit_router)
 router.include_router(ws_router)
+router.include_router(youtube_router)
 
 
 @router.get("/")

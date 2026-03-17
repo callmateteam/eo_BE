@@ -85,6 +85,13 @@ enum ProjectStatus {
   COMPLETED
 }
 
+enum YoutubeUploadStatus {
+  NONE
+  UPLOADING
+  COMPLETED
+  FAILED
+}
+
 model Project {
   id                String        @id @default(uuid()) @db.Uuid
   title             String        @db.VarChar(100)
@@ -97,6 +104,10 @@ model Project {
   status            ProjectStatus @default(CREATED)
   userId            String        @map("user_id") @db.Uuid
   createdAt         DateTime      @default(now()) @map("created_at")
+  youtubeVideoId    String?       @map("youtube_video_id") @db.VarChar(50)
+  youtubeUrl        String?       @map("youtube_url") @db.VarChar(500)
+  youtubeUploadStatus YoutubeUploadStatus @default(NONE) @map("youtube_upload_status")
+  youtubeError      String?       @map("youtube_error") @db.VarChar(500)
   updatedAt         DateTime      @updatedAt @map("updated_at")
 
   user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
