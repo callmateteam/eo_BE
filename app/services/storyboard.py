@@ -360,6 +360,7 @@ async def process_storyboard(
     voice_id: str = "alloy",
     voice_style: str = "",
     character_image_url: str | None = None,
+    project_id: str | None = None,
 ) -> None:
     """콘티 생성 전체 파이프라인 (백그라운드)"""
 
@@ -384,11 +385,7 @@ async def process_storyboard(
         await notify(35, "장면 저장 중...")
 
         # 보조 캐릭터 외형 설명 일괄 조회 (중복 제거)
-        secondary_names = {
-            s["secondaryCharacter"]
-            for s in scenes
-            if s.get("secondaryCharacter")
-        }
+        secondary_names = {s["secondaryCharacter"] for s in scenes if s.get("secondaryCharacter")}
         secondary_descs: dict[str, str] = {}
         for sec_name in secondary_names:
             desc = await get_secondary_character_description(sec_name)
@@ -440,9 +437,7 @@ async def process_storyboard(
         for sc in db_scenes:
             try:
                 # 장면 유형 감지 → 최적 S3 이미지 자동 선택
-                scene_type = detect_scene_type(
-                    sc.content, getattr(sc, "imagePrompt", None)
-                )
+                scene_type = detect_scene_type(sc.content, getattr(sc, "imagePrompt", None))
                 selected_url = select_best_image(
                     extra_images=extra_images,
                     scene_type=scene_type,
@@ -454,7 +449,9 @@ async def process_storyboard(
                 )
                 logger.info(
                     "장면 %d: type=%s → %s",
-                    sc.sceneOrder, scene_type, selected_url.split("/")[-1],
+                    sc.sceneOrder,
+                    scene_type,
+                    selected_url.split("/")[-1],
                 )
             except Exception:
                 logger.exception("장면 이미지 선택 실패: %s", sc.id)
@@ -507,6 +504,13 @@ async def process_storyboard(
             where={"id": storyboard_id},
             data={"status": "READY"},
         )
+
+        # 프로젝트에 스토리보드 연결 + stage 3 자동 진행
+        if project_id:
+            from app.services.project import link_storyboard
+
+            await link_storyboard(project_id, storyboard_id)
+
         msg = "콘티 생성 완료!"
         if failed_count > 0:
             msg = f"콘티 생성 완료 ({failed_count}개 이미지 재생성 필요)"
@@ -663,10 +667,10 @@ async def get_storyboard_detail(
     storyboard_id: str,
     user_id: str,
 ) -> object | None:
-    """콘티 상세 조회 (scenes 포함). 없거나 소유권 불일치 시 None."""
+    """콘티 상세 조회 (scenes + 연결된 프로젝트 포함). 없거나 소유권 불일치 시 None."""
     return await db.storyboard.find_first(
         where={"id": storyboard_id, "userId": user_id},
-        include={"scenes": True},
+        include={"scenes": True, "project": True},
     )
 
 

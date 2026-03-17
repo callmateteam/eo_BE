@@ -85,20 +85,27 @@ enum ProjectStatus {
 }
 
 model Project {
-  id             String        @id @default(uuid()) @db.Uuid
-  title          String        @db.VarChar(100)
-  keyword        String        @default("") @db.VarChar(100)
-  characterId    String        @map("character_id") @db.Uuid
-  status         ProjectStatus @default(CREATED)
-  userId         String        @map("user_id") @db.Uuid
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
+  id                String        @id @default(uuid()) @db.Uuid
+  title             String        @db.VarChar(100)
+  keyword           String        @default("") @db.VarChar(100)
+  currentStage      Int           @default(1) @map("current_stage")
+  characterId       String?       @map("character_id") @db.Uuid
+  customCharacterId String?       @map("custom_character_id") @db.Uuid
+  storyboardId      String?       @unique @map("storyboard_id") @db.Uuid
+  idea              String?       @db.VarChar(2000)
+  status            ProjectStatus @default(CREATED)
+  userId            String        @map("user_id") @db.Uuid
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
 
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  character      Character     @relation(fields: [characterId], references: [id])
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character         Character?        @relation(fields: [characterId], references: [id])
+  customCharacter   CustomCharacter?  @relation(fields: [customCharacterId], references: [id])
+  storyboard        Storyboard?       @relation(fields: [storyboardId], references: [id])
 
   @@index([userId])
   @@index([characterId])
+  @@index([customCharacterId])
   @@index([keyword])
   @@map("projects")
 }
@@ -135,6 +142,7 @@ model CustomCharacter {
 
   user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   storyboards Storyboard[]
+  projects    Project[]
 
   @@index([userId])
   @@map("custom_characters")
@@ -172,6 +180,7 @@ model Storyboard {
   character          Character?       @relation(fields: [characterId], references: [id])
   customCharacter    CustomCharacter? @relation(fields: [customCharacterId], references: [id])
   scenes             StoryboardScene[]
+  project            Project?
 
   @@index([userId])
   @@map("storyboards")

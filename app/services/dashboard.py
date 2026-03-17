@@ -10,7 +10,11 @@ async def get_recent_projects(user_id: str, limit: int = 10) -> list[dict]:
         where={"userId": user_id},
         order={"createdAt": "desc"},
         take=limit,
-        include={"character": True},
+        include={
+            "character": True,
+            "customCharacter": True,
+            "storyboard": True,
+        },
     )
     if not projects:
         return None
@@ -19,37 +23,40 @@ async def get_recent_projects(user_id: str, limit: int = 10) -> list[dict]:
     for p in projects:
         status = p.status
         is_valid = status in ProjectStatus._value2member_map_
-        simple = (
-            SimpleStatus.COMPLETED
-            if status == "COMPLETED"
-            else SimpleStatus.IN_PROGRESS
-        )
+        simple = SimpleStatus.COMPLETED if status == "COMPLETED" else SimpleStatus.IN_PROGRESS
 
-        # 썸네일: 콘티 heroFrameUrl → 없으면 캐릭터 이미지
-        thumbnail = p.character.thumbnailUrl if p.character else ""
-        storyboard = await db.storyboard.find_first(
-            where={"userId": user_id, "characterId": p.characterId},
-            order={"createdAt": "desc"},
-        )
-        if storyboard and storyboard.heroFrameUrl:
-            thumbnail = storyboard.heroFrameUrl
+        # 캐릭터 이름/이미지: 프리셋 → 커스텀 순으로 탐색
+        if p.character:
+            char_name = p.character.name
+            thumbnail = p.character.thumbnailUrl or ""
+        elif hasattr(p, "customCharacter") and p.customCharacter:
+            char_name = p.customCharacter.name
+            thumbnail = p.customCharacter.imageUrl1 or ""
+        else:
+            char_name = ""
+            thumbnail = ""
 
-        result.append({
-            "id": p.id,
-            "title": p.title,
-            "character_id": p.characterId or "",
-            "character_name": p.character.name if p.character else "",
-            "character_image": thumbnail,
-            "status": status,
-            "simple_status": simple,
-            "status_label": STATUS_LABEL.get(ProjectStatus(status), "알 수 없음")
-            if is_valid
-            else "알 수 없음",
-            "progress": STATUS_PROGRESS.get(ProjectStatus(status), 0)
-            if is_valid
-            else 0,
-            "created_at": p.createdAt.isoformat(),
-        })
+        # 썸네일: 연결된 스토리보드 heroFrameUrl 우선
+        sb = getattr(p, "storyboard", None)
+        if sb and sb.heroFrameUrl:
+            thumbnail = sb.heroFrameUrl
+
+        result.append(
+            {
+                "id": p.id,
+                "title": p.title,
+                "character_id": p.characterId or "",
+                "character_name": char_name,
+                "character_image": thumbnail,
+                "status": status,
+                "simple_status": simple,
+                "status_label": STATUS_LABEL.get(ProjectStatus(status), "알 수 없음")
+                if is_valid
+                else "알 수 없음",
+                "progress": STATUS_PROGRESS.get(ProjectStatus(status), 0) if is_valid else 0,
+                "created_at": p.createdAt.isoformat(),
+            }
+        )
     return result
 
 
@@ -61,7 +68,7 @@ async def get_recent_characters(user_id: str, limit: int = 10) -> list[dict] | N
         where={"userId": user_id},
         order={"createdAt": "desc"},
         take=fetch_limit,
-        include={"character": True},
+        include={"character": True, "customCharacter": True},
     )
     # 2) Storyboard → 프리셋 + 커스텀 캐릭터
     storyboards = await db.storyboard.find_many(
@@ -75,15 +82,33 @@ async def get_recent_characters(user_id: str, limit: int = 10) -> list[dict] | N
     entries: list[tuple[str, str, dict]] = []
 
     for p in projects:
-        if not p.character:
-            continue
-        entries.append(
-            (
-                f"preset:{p.character.id}",
-                p.createdAt.isoformat(),
-                _preset_dict(p.character, p.createdAt.isoformat()),
+        if p.character:
+            entries.append(
+                (
+                    f"preset:{p.character.id}",
+                    p.createdAt.isoformat(),
+                    _preset_dict(p.character, p.createdAt.isoformat()),
+                )
             )
-        )
+        cc = getattr(p, "customCharacter", None)
+        if cc and cc.status == "COMPLETED":
+            entries.append(
+                (
+                    f"custom:{cc.id}",
+                    p.createdAt.isoformat(),
+                    {
+                        "id": cc.id,
+                        "name": cc.name,
+                        "name_en": "",
+                        "series": "",
+                        "category": cc.style,
+                        "image_url": cc.imageUrl1,
+                        "thumbnail_url": cc.imageUrl1,
+                        "type": "custom",
+                        "last_used_at": p.createdAt.isoformat(),
+                    },
+                )
+            )
 
     for sb in storyboards:
         if sb.character:

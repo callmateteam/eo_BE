@@ -15,12 +15,14 @@ class StoryboardCreateRequest(BaseModel):
     custom_character_id: str | None = Field(
         None, description="커스텀 캐릭터 ID (character_id와 택 1)"
     )
+    project_id: str | None = Field(None, description="프로젝트 ID (프로젝트 플로우에서 자동 연결)")
 
 
 class StoryboardCreateResponse(BaseModel):
     """콘티 생성 응답"""
 
     id: str
+    project_id: str | None = None
     status: str = "GENERATING"
     message: str = "콘티 생성이 시작되었습니다."
 
@@ -52,6 +54,7 @@ class StoryboardDetailResponse(BaseModel):
     idea: str
     character_id: str | None = None
     custom_character_id: str | None = None
+    project_id: str | None = None
     status: str
     error_msg: str | None = None
     bgm_mood: str | None = None

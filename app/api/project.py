@@ -12,6 +12,7 @@ from app.schemas.project import (
     ProjectDetailResponse,
     ProjectListItem,
     ProjectListResponse,
+    ProjectUpdateRequest,
     project_to_item,
 )
 from app.services.project import (
@@ -25,6 +26,9 @@ from app.services.project import (
 )
 from app.services.project import (
     list_projects as svc_list_projects,
+)
+from app.services.project import (
+    update_project as svc_update_project,
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -44,18 +48,52 @@ async def create_project(
     req: ProjectCreateRequest,
     current_user: dict = Depends(get_current_user),
 ) -> ProjectCreateResponse:
-    """새 프로젝트 생성"""
+    """새 프로젝트 생성 (경로 A: 프리셋 캐릭터 / 경로 B: 커스텀 캐릭터)"""
     try:
         result = await svc_create_project(
             title=req.title,
             keyword=req.keyword,
             character_id=req.character_id,
+            custom_character_id=req.custom_character_id,
             user_id=current_user["id"],
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
 
-    return ProjectCreateResponse(id=result["id"], title=result["title"])
+    return ProjectCreateResponse(
+        id=result["id"],
+        title=result["title"],
+        current_stage=result["current_stage"],
+    )
+
+
+@router.patch(
+    "/{project_id}",
+    response_model=ProjectDetailResponse,
+    summary="프로젝트 수정 (단계별 데이터 저장 + 자동 단계 진행)",
+    responses={
+        400: {"model": ErrorResponse, "description": "단계 조건 미충족 / 잘못된 참조"},
+        401: {"model": ErrorResponse, "description": "인증 필요"},
+        404: {"model": ErrorResponse, "description": "프로젝트 없음"},
+    },
+)
+async def update_project(
+    project_id: str,
+    req: ProjectUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+) -> ProjectDetailResponse:
+    """프로젝트 수정 (단계별 데이터 저장)"""
+    try:
+        updated = await svc_update_project(
+            project_id=project_id,
+            user_id=current_user["id"],
+            **req.model_dump(exclude_none=True),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    if not updated:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+    return ProjectDetailResponse(**project_to_item(updated))
 
 
 @router.get(

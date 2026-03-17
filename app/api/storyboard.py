@@ -23,6 +23,7 @@ from app.schemas.storyboard import (
     StoryboardListResponse,
     VideoGenerationStartResponse,
 )
+from app.services.project import advance_to_video_generating
 from app.services.storyboard import (
     count_generating_storyboards,
     create_storyboard_record,
@@ -170,12 +171,13 @@ async def create_storyboard(
             voice_id=char_info.voice_id,
             voice_style=char_info.voice_style,
             character_image_url=char_info.image_url,
+            project_id=req.project_id,
         )
     )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
-    return StoryboardCreateResponse(id=record_id)
+    return StoryboardCreateResponse(id=record_id, project_id=req.project_id)
 
 
 @router.get(
@@ -246,11 +248,16 @@ async def get_storyboard(
     ]
     total_dur = sum(s.duration for s in scenes)
 
+    # 연결된 프로젝트 ID 조회
+    linked = getattr(record, "project", None)
+    project_id = linked.id if linked else None
+
     return StoryboardDetailResponse(
         id=record.id,
         idea=record.idea,
         character_id=record.characterId,
         custom_character_id=record.customCharacterId,
+        project_id=project_id,
         status=record.status,
         error_msg="생성에 실패했습니다" if record.errorMsg else None,
         bgm_mood=record.bgmMood,
@@ -460,6 +467,13 @@ async def generate_storyboard_videos(
         if "이미 영상" in msg:
             raise HTTPException(status_code=409, detail=msg) from None
         raise HTTPException(status_code=400, detail=msg) from None
+
+    # 프로젝트 상태 업데이트 (연결된 프로젝트가 있으면)
+    from app.core.database import db as _db
+
+    linked_project = await _db.project.find_first(where={"storyboardId": storyboard_id})
+    if linked_project:
+        await advance_to_video_generating(linked_project.id)
 
     # 영상 생성 콜백 (dict 메시지를 JSON으로 전송)
     video_sub_key = f"{storyboard_id}:video"

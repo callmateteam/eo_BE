@@ -17,6 +17,8 @@ from app.services.storyboard import get_character_description
 from app.services.video import get_generator
 from app.services.video_merge import SceneInput, merge_storyboard_video
 
+# 순환 임포트 방지: 함수 내에서 import
+
 logger = logging.getLogger(__name__)
 
 # 동시 영상 생성 제한 (장면 단위)
@@ -181,6 +183,10 @@ async def process_storyboard_videos(
             progress_callback,
             terminal=True,
         )
+
+        # 프로젝트 4단계(영상완료) 자동 진행
+        if not all_failed:
+            await _advance_project_stage(storyboard_id)
 
     except Exception:
         logger.exception("영상 생성 파이프라인 실패: %s", storyboard_id)
@@ -421,3 +427,12 @@ async def _download_and_upload(
 
     s3_url = await asyncio.to_thread(upload_video, video_bytes, user_id)
     return s3_url
+
+
+async def _advance_project_stage(storyboard_id: str) -> None:
+    """스토리보드에 연결된 프로젝트를 4단계(영상완료)로 진행한다."""
+    from app.services.project import advance_to_video_complete
+
+    project = await db.project.find_first(where={"storyboardId": storyboard_id})
+    if project:
+        await advance_to_video_complete(project.id)
