@@ -214,3 +214,31 @@ class RenderStartResponse(BaseModel):
     storyboard_id: str
     status: str = "RENDERING"
     message: str = "최종 렌더링이 시작되었습니다."
+
+
+class FinalizeRequest(BaseModel):
+    """영상 완성(저장) 요청"""
+
+    title: str = Field(min_length=1, max_length=100, description="영상 제목")
+
+
+class FinalizeResponse(BaseModel):
+    """영상 완성 응답"""
+
+    project_id: str
+    title: str
+    video_url: str
+    thumbnail_url: str | None = None
+    duration: float
+    message: str = "영상이 저장되었습니다."
+
+
+class VideoInfoResponse(BaseModel):
+    """완성된 영상 정보 조회 응답"""
+
+    project_id: str
+    title: str
+    video_url: str
+    thumbnail_url: str | None = None
+    duration: float
+    created_at: str

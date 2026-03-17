@@ -169,6 +169,95 @@ async def _prune_history(edit_id: str) -> None:
         await db.videoedithistory.delete(where={"id": h.id})
 
 
+async def finalize_project(storyboard_id: str, user_id: str, title: str) -> dict | None:
+    """영상 완성 처리 — 제목 저장 + 프로젝트 COMPLETED 상태
+
+    Returns:
+        완성 정보 dict 또는 None (스토리보드 없음)
+    """
+    sb = await db.storyboard.find_first(
+        where={"id": storyboard_id, "userId": user_id},
+        include={"project": True},
+    )
+    if not sb or not sb.finalVideoUrl:
+        return None
+
+    # 영상 길이 조회
+    duration = await _get_video_duration(sb.finalVideoUrl)
+
+    # 프로젝트 업데이트
+    project = sb.project
+    if project:
+        await db.project.update(
+            where={"id": project.id},
+            data={
+                "title": title,
+                "status": "COMPLETED",
+                "currentStage": 4,
+            },
+        )
+        project_id = project.id
+    else:
+        project_id = ""
+
+    return {
+        "project_id": project_id,
+        "title": title,
+        "video_url": sb.finalVideoUrl,
+        "thumbnail_url": sb.heroFrameUrl,
+        "duration": duration,
+    }
+
+
+async def get_video_info(storyboard_id: str, user_id: str) -> dict | None:
+    """완성된 영상 정보 조회"""
+    sb = await db.storyboard.find_first(
+        where={"id": storyboard_id, "userId": user_id},
+        include={"project": True},
+    )
+    if not sb or not sb.finalVideoUrl:
+        return None
+
+    duration = await _get_video_duration(sb.finalVideoUrl)
+    project = sb.project
+
+    return {
+        "project_id": project.id if project else "",
+        "title": project.title if project else "",
+        "video_url": sb.finalVideoUrl,
+        "thumbnail_url": sb.heroFrameUrl,
+        "duration": duration,
+        "created_at": sb.createdAt.isoformat(),
+    }
+
+
+async def _get_video_duration(video_url: str) -> float:
+    """ffprobe로 영상 길이 조회 (S3 URL 직접 조회)"""
+    import asyncio
+
+    cmd = [
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        video_url,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        return round(float(stdout.decode().strip()), 2)
+    except Exception:
+        logger.warning("영상 길이 조회 실패: %s", video_url)
+        return 0.0
+
+
 async def get_storyboard_video_url(storyboard_id: str, user_id: str) -> str | None:
     """스토리보드의 finalVideoUrl 조회 (소유권 확인 포함)"""
     sb = await db.storyboard.find_first(

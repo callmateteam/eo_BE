@@ -7,12 +7,15 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
+from fastapi.responses import StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.deps import get_current_user, get_ws_user_id
 from app.schemas.auth import ErrorResponse
 from app.schemas.video_edit import (
     EditData,
+    FinalizeRequest,
+    FinalizeResponse,
     RenderStartResponse,
     ThumbnailRequest,
     ThumbnailResponse,
@@ -21,11 +24,14 @@ from app.schemas.video_edit import (
     UndoResponse,
     VideoEditResponse,
     VideoEditUpdateRequest,
+    VideoInfoResponse,
 )
 from app.services.tts import generate_tts
 from app.services.video_edit import (
+    finalize_project,
     get_or_create_edit,
     get_storyboard_video_url,
+    get_video_info,
     undo_edit,
     update_edit,
     update_storyboard_thumbnail,
@@ -230,6 +236,91 @@ async def start_render(
     task.add_done_callback(_background_tasks.discard)
 
     return RenderStartResponse(storyboard_id=storyboard_id)
+
+
+@router.post(
+    "/{storyboard_id}/finalize",
+    response_model=FinalizeResponse,
+    summary="영상 완성 (제목 입력 + 프로젝트 완료)",
+    responses={
+        401: {"model": ErrorResponse, "description": "인증 필요"},
+        404: {
+            "model": ErrorResponse,
+            "description": "스토리보드 없음 또는 렌더링 미완료",
+        },
+    },
+)
+async def finalize(
+    storyboard_id: str,
+    req: FinalizeRequest,
+    current_user: dict = Depends(get_current_user),
+) -> FinalizeResponse:
+    """렌더링 완료 후 제목 입력하여 영상 저장 완료
+
+    프로젝트 상태를 COMPLETED로 변경하고 영상 정보를 반환합니다.
+    """
+    result = await finalize_project(storyboard_id, current_user["id"], req.title)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="완성된 영상이 없습니다. 렌더링을 먼저 완료해주세요.",
+        )
+    return FinalizeResponse(**result)
+
+
+@router.get(
+    "/{storyboard_id}/video-info",
+    response_model=VideoInfoResponse,
+    summary="완성된 영상 정보 조회 (제목, 시간, URL)",
+    responses={
+        401: {"model": ErrorResponse, "description": "인증 필요"},
+        404: {"model": ErrorResponse, "description": "완성된 영상 없음"},
+    },
+)
+async def video_info(
+    storyboard_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> VideoInfoResponse:
+    """완성된 영상의 제목, 길이, URL, 썸네일 조회"""
+    result = await get_video_info(storyboard_id, current_user["id"])
+    if not result:
+        raise HTTPException(status_code=404, detail="완성된 영상이 없습니다")
+    return VideoInfoResponse(**result)
+
+
+@router.get(
+    "/{storyboard_id}/download",
+    summary="영상 다운로드",
+    responses={
+        401: {"model": ErrorResponse, "description": "인증 필요"},
+        404: {"model": ErrorResponse, "description": "완성된 영상 없음"},
+    },
+)
+async def download_video(
+    storyboard_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """완성된 영상 파일 다운로드 (mp4 스트리밍)"""
+    import httpx
+
+    video_url = await get_storyboard_video_url(storyboard_id, current_user["id"])
+    if not video_url:
+        raise HTTPException(status_code=404, detail="완성된 영상이 없습니다")
+
+    async def stream():
+        async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
+            async with client.stream("GET", video_url) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    yield chunk
+
+    return StreamingResponse(
+        stream(),
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": (f'attachment; filename="eo_video_{storyboard_id[:8]}.mp4"'),
+        },
+    )
 
 
 # ── WebSocket: 렌더링 진행률 ──

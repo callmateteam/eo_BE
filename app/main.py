@@ -161,9 +161,13 @@ AI 기반 숏폼 영상 생성 플랫폼 백엔드 API
 | POST | `/{id}/edit/undo` | 되돌리기 (최대 50단계) | O | 200, 401, 409 |
 | POST | `/{id}/edit/tts` | 커스텀 TTS 생성 (텍스트 → audio_url) | O | 200, 401, 500 |
 | POST | `/{id}/thumbnail` | 썸네일 프레임 추출 (시간 지정) | O | 200, 401, 404, 500 |
-| POST | `/{id}/render` | 최종 렌더링 시작 (편집 적용) | O | 202, 401, 404 |
+| POST | `/{id}/render` | 최종 렌더링 시작 (편집 적용, WS 진행률) | O | 202, 401, 404 |
+| POST | `/{id}/finalize` | 영상 완성 (제목 입력 → 프로젝트 COMPLETED) | O | 200, 401, 404 |
+| GET | `/{id}/video-info` | 완성 영상 정보 (제목, 시간, URL, 썸네일) | O | 200, 401, 404 |
+| GET | `/{id}/download` | 영상 mp4 다운로드 (스트리밍) | O | 200, 401, 404 |
 
 - **편집 기능**: 씬 순서 변경, 트림(0.001초 정밀도), 배속(0.5~2.0x), 전환 효과(5종), 구간 음소거/볼륨, BGM, 자막(폰트8종/색상/배경/그림자/위치/애니메이션3종), 커스텀 TTS 오버레이, 썸네일
+- **완성 플로우**: render(인코딩,WS%) → finalize(제목입력) → video-info(시간확인) → download(다운로드)
 - **되돌리기**: PATCH마다 히스토리 자동 저장, POST undo로 복원
 - **자막 폰트**: NanumGothic, NanumMyeongjo, NanumSquareRound, NanumBarunGothic, MapoFlowerIsland, GmarketSans, Pretendard, DoHyeon
 - **전환 효과**: none, fade, dissolve, slide_left, slide_up, wipe
