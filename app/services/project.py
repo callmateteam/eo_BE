@@ -255,6 +255,13 @@ async def link_storyboard(project_id: str, storyboard_id: str) -> None:
     )
 
 
+async def advance_to_video_generating_by_storyboard(storyboard_id: str) -> None:
+    """스토리보드에 연결된 프로젝트의 영상 생성 상태를 업데이트한다."""
+    linked = await db.project.find_first(where={"storyboardId": storyboard_id})
+    if linked:
+        await advance_to_video_generating(linked.id)
+
+
 async def advance_to_video_generating(project_id: str) -> None:
     """영상 생성 시작 시 프로젝트 상태를 업데이트한다."""
     record = await db.project.find_first(where={"id": project_id})

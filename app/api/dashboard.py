@@ -38,9 +38,7 @@ async def get_dashboard(current_user: dict = Depends(get_current_user)):
     trending_raw = await fetch_trending_keywords(max_results=5)
     creation_raw = await get_creation_trends(limit=10)
 
-    recent_projects = (
-        [ProjectItem(**p) for p in projects_raw] if projects_raw else None
-    )
+    recent_projects = [ProjectItem(**p) for p in projects_raw] if projects_raw else None
     recent_characters = (
         [RecentCharacterItem(**c) for c in characters_raw] if characters_raw else None
     )

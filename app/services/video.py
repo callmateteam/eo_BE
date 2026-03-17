@@ -157,7 +157,9 @@ class HailuoVideoGenerator(VideoGenerator):
             self._result_base = "https://queue.fal.run/fal-ai/minimax/video-01-live/image-to-video"
         else:
             self._base = "https://queue.fal.run/fal-ai/minimax/hailuo-02/standard/image-to-video"
-            self._result_base = "https://queue.fal.run/fal-ai/minimax/hailuo-02/standard/image-to-video"
+            self._result_base = (
+                "https://queue.fal.run/fal-ai/minimax/hailuo-02/standard/image-to-video"
+            )
         self._model = model
 
     async def generate(

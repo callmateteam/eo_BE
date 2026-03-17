@@ -166,11 +166,13 @@ async def _fetch_google_trends() -> list[dict]:
             if not title or not _HANGUL_RE.search(title):
                 continue
 
-            results.append({
-                "keyword": title,
-                "traffic": traffic,
-                "source": "google",
-            })
+            results.append(
+                {
+                    "keyword": title,
+                    "traffic": traffic,
+                    "source": "google",
+                }
+            )
 
         results.sort(key=lambda x: _parse_traffic(x["traffic"]), reverse=True)
         return results
@@ -221,13 +223,15 @@ async def _fetch_youtube_trending() -> list[dict]:
 
             category_name = _YT_CATEGORY_NAMES.get(category_id, "기타")
 
-            results.append({
-                "keyword": keyword,
-                "traffic": "",
-                "source": "youtube",
-                "category": category_name,
-                "channel": channel,
-            })
+            results.append(
+                {
+                    "keyword": keyword,
+                    "traffic": "",
+                    "source": "youtube",
+                    "category": category_name,
+                    "channel": channel,
+                }
+            )
 
         return results
 
@@ -310,12 +314,14 @@ async def _filter_keywords_gpt(raw_keywords: list[dict]) -> list[dict]:
         filtered: list[dict] = []
         for kw in approved:
             search_query = quote(kw)
-            filtered.append({
-                "keyword": kw,
-                "traffic": "",
-                "source": "curated",
-                "url": f"https://www.youtube.com/results?search_query={search_query}",
-            })
+            filtered.append(
+                {
+                    "keyword": kw,
+                    "traffic": "",
+                    "source": "curated",
+                    "url": f"https://www.youtube.com/results?search_query={search_query}",
+                }
+            )
 
         # rank 재부여
         for i, r in enumerate(filtered):

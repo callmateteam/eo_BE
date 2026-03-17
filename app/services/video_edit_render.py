@@ -138,8 +138,11 @@ async def render_with_edits(
                     with open(thumb_path, "rb") as f:
                         thumb_data = f.read()
                     thumb_url = await asyncio.to_thread(
-                        upload_image, thumb_data, user_id,
-                        content_type="image/png", folder="thumbnails",
+                        upload_image,
+                        thumb_data,
+                        user_id,
+                        content_type="image/png",
+                        folder="thumbnails",
                     )
                     await db.storyboard.update(
                         where={"id": storyboard_id},
@@ -161,9 +164,7 @@ async def render_with_edits(
         return None
 
 
-async def extract_thumbnail_frame(
-    video_url: str, time_seconds: float, user_id: str
-) -> str:
+async def extract_thumbnail_frame(video_url: str, time_seconds: float, user_id: str) -> str:
     """영상에서 특정 시간의 프레임을 추출하여 S3 업로드"""
     with tempfile.TemporaryDirectory(prefix="eo_thumb_") as tmpdir:
         video_path = os.path.join(tmpdir, "video.mp4")
@@ -222,9 +223,7 @@ async def _trim_and_speed(
     await _run_ffmpeg(cmd)
 
 
-async def _concat_with_transitions(
-    files: list[str], transitions: list, output_path: str
-) -> None:
+async def _concat_with_transitions(files: list[str], transitions: list, output_path: str) -> None:
     """전환 효과 적용하며 concat"""
     if len(files) == 1:
         await _faststart(files[0], output_path)
@@ -243,8 +242,17 @@ async def _concat_with_transitions(
             concat_list = f.name
 
         cmd = [
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-            "-i", concat_list, "-c", "copy", output_path,
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list,
+            "-c",
+            "copy",
+            output_path,
         ]
         await _run_ffmpeg(cmd)
         os.unlink(concat_list)
@@ -274,14 +282,23 @@ async def _concat_with_transitions(
             offset = max(0, duration - transition_duration)
 
             cmd = [
-                "ffmpeg", "-y",
-                "-i", current,
-                "-i", files[i],
+                "ffmpeg",
+                "-y",
+                "-i",
+                current,
+                "-i",
+                files[i],
                 "-filter_complex",
                 f"[0:v][1:v]xfade=transition={xfade_type}:duration={transition_duration}:offset={offset}[v];"
                 f"[0:a][1:a]acrossfade=d={transition_duration}[a]",
-                "-map", "[v]", "-map", "[a]",
-                "-c:v", "libx264", "-preset", "fast",
+                "-map",
+                "[v]",
+                "-map",
+                "[a]",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
                 out,
             ]
             await _run_ffmpeg(cmd)
@@ -304,9 +321,13 @@ def _get_xfade_type(t: TransitionType) -> str:
 async def _get_duration(path: str) -> float:
     """ffprobe로 영상 길이 조회"""
     cmd = [
-        "ffprobe", "-v", "quiet",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
         path,
     ]
     proc = await asyncio.create_subprocess_exec(
@@ -319,9 +340,7 @@ async def _get_duration(path: str) -> float:
         return 5.0
 
 
-async def _apply_audio_adjustments(
-    input_path: str, scene_edits: list, output_path: str
-) -> None:
+async def _apply_audio_adjustments(input_path: str, scene_edits: list, output_path: str) -> None:
     """구간별 음소거/볼륨 조절"""
     filters = []
     elapsed = 0.0
@@ -339,9 +358,7 @@ async def _apply_audio_adjustments(
             if vr.volume != 1.0:
                 start = elapsed + vr.start
                 end = elapsed + vr.end
-                filters.append(
-                    f"volume={vr.volume}:enable='between(t,{start:.3f},{end:.3f})'"
-                )
+                filters.append(f"volume={vr.volume}:enable='between(t,{start:.3f},{end:.3f})'")
 
         duration = (se.trim_end or 5.0) - se.trim_start
         if se.speed != 1.0:
@@ -387,12 +404,23 @@ async def _mix_tts_overlays(
     mix_str = "[0:a]" + "".join(mix_labels)
     filters.append(f"{mix_str}amix=inputs={n}:normalize=0[aout]")
 
-    cmd.extend([
-        "-filter_complex", ";".join(filters),
-        "-map", "0:v", "-map", "[aout]",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-        output_path,
-    ])
+    cmd.extend(
+        [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "0:v",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            output_path,
+        ]
+    )
     await _run_ffmpeg(cmd)
 
 
@@ -439,10 +467,27 @@ async def _mix_bgm(
         )
 
     cmd = [
-        "ffmpeg", "-y", "-i", input_path, "-stream_loop", "-1", "-i", bgm_path,
-        "-filter_complex", fc,
-        "-map", "0:v", "-map", "[aout]",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-stream_loop",
+        "-1",
+        "-i",
+        bgm_path,
+        "-filter_complex",
+        fc,
+        "-map",
+        "0:v",
+        "-map",
+        "[aout]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
         output_path,
     ]
     await _run_ffmpeg(cmd)
@@ -514,17 +559,13 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
                 parts.append(f"{{\\fs{sz * 2}}}{ch}")
             text = "".join(parts)
 
-        events.append(
-            f"Dialogue: 0,{start_ts},{end_ts},{style_name},,0,0,0,,{anim_tag}{text}"
-        )
+        events.append(f"Dialogue: 0,{start_ts},{end_ts},{style_name},,0,0,0,,{anim_tag}{text}")
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(header)
         f.write("\n".join(styles))
         f.write("\n\n[Events]\n")
-        f.write(
-            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-        )
+        f.write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
         f.write("\n".join(events))
         f.write("\n")
 
@@ -568,10 +609,20 @@ def _get_animation_tag(animation: SubtitleAnimation, duration: float) -> str:
 async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> None:
     """ASS 자막 번인"""
     cmd = [
-        "ffmpeg", "-y", "-i", input_path,
-        "-vf", f"ass={ass_path}",
-        "-c:a", "copy", "-c:v", "libx264", "-preset", "fast",
-        "-movflags", "+faststart",
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-vf",
+        f"ass={ass_path}",
+        "-c:a",
+        "copy",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-movflags",
+        "+faststart",
         output_path,
     ]
     await _run_ffmpeg(cmd)
@@ -580,8 +631,14 @@ async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> N
 async def _faststart(input_path: str, output_path: str) -> None:
     """faststart만 적용"""
     cmd = [
-        "ffmpeg", "-y", "-i", input_path,
-        "-c", "copy", "-movflags", "+faststart",
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
         output_path,
     ]
     await _run_ffmpeg(cmd)
@@ -590,11 +647,16 @@ async def _faststart(input_path: str, output_path: str) -> None:
 async def _extract_frame(video_path: str, time_seconds: float, output_path: str) -> None:
     """특정 시간의 프레임 추출"""
     cmd = [
-        "ffmpeg", "-y",
-        "-ss", f"{time_seconds:.3f}",
-        "-i", video_path,
-        "-frames:v", "1",
-        "-q:v", "2",
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{time_seconds:.3f}",
+        "-i",
+        video_path,
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
         output_path,
     ]
     await _run_ffmpeg(cmd)

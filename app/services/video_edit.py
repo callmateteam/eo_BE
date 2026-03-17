@@ -169,6 +169,24 @@ async def _prune_history(edit_id: str) -> None:
         await db.videoedithistory.delete(where={"id": h.id})
 
 
+async def get_storyboard_video_url(storyboard_id: str, user_id: str) -> str | None:
+    """스토리보드의 finalVideoUrl 조회 (소유권 확인 포함)"""
+    sb = await db.storyboard.find_first(
+        where={"id": storyboard_id, "userId": user_id},
+    )
+    if not sb or not sb.finalVideoUrl:
+        return None
+    return sb.finalVideoUrl
+
+
+async def update_storyboard_thumbnail(storyboard_id: str, url: str) -> None:
+    """스토리보드 heroFrameUrl 업데이트"""
+    await db.storyboard.update(
+        where={"id": storyboard_id},
+        data={"heroFrameUrl": url},
+    )
+
+
 def _to_dict(edit) -> dict:
     """VideoEdit DB 레코드 → dict 변환"""
     return {

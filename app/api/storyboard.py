@@ -23,7 +23,7 @@ from app.schemas.storyboard import (
     StoryboardListResponse,
     VideoGenerationStartResponse,
 )
-from app.services.project import advance_to_video_generating
+from app.services.project import advance_to_video_generating_by_storyboard
 from app.services.storyboard import (
     count_generating_storyboards,
     create_storyboard_record,
@@ -469,11 +469,7 @@ async def generate_storyboard_videos(
         raise HTTPException(status_code=400, detail=msg) from None
 
     # 프로젝트 상태 업데이트 (연결된 프로젝트가 있으면)
-    from app.core.database import db as _db
-
-    linked_project = await _db.project.find_first(where={"storyboardId": storyboard_id})
-    if linked_project:
-        await advance_to_video_generating(linked_project.id)
+    await advance_to_video_generating_by_storyboard(storyboard_id)
 
     # 영상 생성 콜백 (dict 메시지를 JSON으로 전송)
     video_sub_key = f"{storyboard_id}:video"

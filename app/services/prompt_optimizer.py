@@ -39,18 +39,14 @@ MOTION_ENHANCERS: dict[str, str] = {
         "organic follow-through on each movement"
     ),
     "sitting": (
-        "gentle breathing motion, subtle body sway, "
-        "natural hand gestures, relaxed organic posture"
+        "gentle breathing motion, subtle body sway, natural hand gestures, relaxed organic posture"
     ),
     "talking": (
         "natural lip movement, subtle head tilts, "
         "gentle hand gestures while speaking, "
         "lifelike body language"
     ),
-    "default": (
-        "fluid natural motion, smooth weight shift, "
-        "organic movement, lifelike animation"
-    ),
+    "default": ("fluid natural motion, smooth weight shift, organic movement, lifelike animation"),
 }
 
 # ── 동작 키워드 → 장면 유형 매핑 ──
@@ -214,9 +210,7 @@ def build_hailuo_prompt(
 
     # 2-1. 보조 캐릭터가 있으면 외형 설명 삽입
     if secondary_character and secondary_character_desc:
-        parts.append(
-            f"Together with {secondary_character}: {secondary_character_desc}"
-        )
+        parts.append(f"Together with {secondary_character}: {secondary_character_desc}")
 
     # 3. 자연스러운 동작 보강 (로봇 동작 방지 핵심)
     parts.append(motion_enhancer)

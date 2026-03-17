@@ -23,7 +23,13 @@ from app.schemas.video_edit import (
     VideoEditUpdateRequest,
 )
 from app.services.tts import generate_tts
-from app.services.video_edit import get_or_create_edit, undo_edit, update_edit
+from app.services.video_edit import (
+    get_or_create_edit,
+    get_storyboard_video_url,
+    undo_edit,
+    update_edit,
+    update_storyboard_thumbnail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,18 +151,15 @@ async def extract_thumbnail(
     current_user: dict = Depends(get_current_user),
 ) -> ThumbnailResponse:
     """영상 내 특정 시간의 프레임을 썸네일로 추출"""
-    from app.core.database import db
     from app.services.video_edit_render import extract_thumbnail_frame
 
-    sb = await db.storyboard.find_first(
-        where={"id": storyboard_id, "userId": current_user["id"]},
-    )
-    if not sb or not sb.finalVideoUrl:
+    video_url = await get_storyboard_video_url(storyboard_id, current_user["id"])
+    if not video_url:
         raise HTTPException(status_code=404, detail="완성된 영상이 없습니다")
 
     try:
         url = await extract_thumbnail_frame(
-            video_url=sb.finalVideoUrl,
+            video_url=video_url,
             time_seconds=req.time,
             user_id=current_user["id"],
         )
@@ -164,11 +167,7 @@ async def extract_thumbnail(
         logger.exception("썸네일 추출 실패")
         raise HTTPException(status_code=500, detail=str(exc)) from None
 
-    # heroFrameUrl 업데이트
-    await db.storyboard.update(
-        where={"id": storyboard_id},
-        data={"heroFrameUrl": url},
-    )
+    await update_storyboard_thumbnail(storyboard_id, url)
 
     return ThumbnailResponse(thumbnail_url=url)
 
