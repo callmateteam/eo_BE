@@ -8,10 +8,9 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 
-import httpx
-
 from app.core.config import settings
 from app.core.database import db
+from app.core.http_client import get_openai_client
 from app.core.s3 import upload_image
 from app.services.tts import generate_scene_narrations
 
@@ -77,7 +76,8 @@ async def generate_scenes_with_gpt(
     art_style: str = "",
 ) -> tuple[list[dict], str | None]:
     """GPT-4o-mini로 콘티 장면 분할 생성 (토큰 절약)"""
-    async with httpx.AsyncClient(timeout=60) as client:
+    client = get_openai_client()
+    async with asyncio.timeout(60):
         resp = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={
@@ -236,7 +236,8 @@ async def generate_scene_image(
 
 async def _generate_new(prompt: str) -> bytes:
     """새 이미지 생성 (generations API)"""
-    async with httpx.AsyncClient(timeout=120) as client:
+    client = get_openai_client()
+    async with asyncio.timeout(120):
         resp = await client.post(
             "https://api.openai.com/v1/images/generations",
             headers={
@@ -257,15 +258,16 @@ async def _generate_new(prompt: str) -> bytes:
     if "b64_json" in result:
         return base64.b64decode(result["b64_json"])
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        img_resp = await client.get(result["url"])
-        img_resp.raise_for_status()
-        return img_resp.content
+    dl = get_openai_client()
+    img_resp = await dl.get(result["url"])
+    img_resp.raise_for_status()
+    return img_resp.content
 
 
 async def _generate_with_edit(prompt: str, reference_bytes: bytes) -> bytes:
     """히어로 프레임을 참조하여 편집 API로 캐릭터 일관성 유지 (multipart/form-data)"""
-    async with httpx.AsyncClient(timeout=120) as client:
+    client = get_openai_client()
+    async with asyncio.timeout(120):
         resp = await client.post(
             "https://api.openai.com/v1/images/edits",
             headers={
@@ -288,10 +290,10 @@ async def _generate_with_edit(prompt: str, reference_bytes: bytes) -> bytes:
     if "b64_json" in result:
         return base64.b64decode(result["b64_json"])
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        img_resp = await client.get(result["url"])
-        img_resp.raise_for_status()
-        return img_resp.content
+    dl = get_openai_client()
+    img_resp = await dl.get(result["url"])
+    img_resp.raise_for_status()
+    return img_resp.content
 
 
 class CharacterInfo:
@@ -380,7 +382,8 @@ async def get_secondary_character_description(name: str) -> str:
     # 2. DB에 없으면 GPT로 외형 설명 생성
     logger.info("보조 캐릭터 DB에 없음, GPT 생성: %s", name)
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        client = get_openai_client()
+        async with asyncio.timeout(15):
             resp = await client.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={
@@ -487,85 +490,91 @@ async def process_storyboard(
             )
         await notify(40, "장면 저장 완료")
 
-        # Step 3: S3 원본 이미지 자동 선택 (DALL-E 제거, 비용 $0)
-        from app.services.prompt_optimizer import detect_scene_type, select_best_image
-
+        # Step 3+4: 이미지 생성 + TTS 병렬 실행 (40-90%)
         db_scenes = await db.storyboardscene.find_many(
             where={"storyboardId": storyboard_id},
             order={"sceneOrder": "asc"},
         )
 
-        # 캐릭터 시드 데이터 조회 (extraImages, artStyle 등)
-        sb_for_char = await db.storyboard.find_unique(
-            where={"id": storyboard_id},
-            include={"character": True},
-        )
-        extra_images = ""
-        base_image_url = character_image_url or ""
-        if sb_for_char and sb_for_char.character:
-            c = sb_for_char.character
-            extra_images = getattr(c, "extraImages", "") or ""
-            base_image_url = c.imageUrl or base_image_url
+        await notify(45, "장면 이미지 생성 + 나레이션 동시 시작...")
 
-        await notify(45, "장면별 이미지 선택 중...")
-
-        for sc in db_scenes:
+        # 첫 장면 이미지를 먼저 생성 (히어로 프레임 + 참조용)
+        hero_bytes: bytes | None = None
+        if db_scenes:
+            first = db_scenes[0]
             try:
-                # 장면 유형 감지 → 최적 S3 이미지 자동 선택
-                scene_type = detect_scene_type(sc.content, getattr(sc, "imagePrompt", None))
-                selected_url = select_best_image(
-                    extra_images=extra_images,
-                    scene_type=scene_type,
-                    base_image_url=base_image_url,
+                url, hero_bytes = await generate_scene_image(
+                    image_prompt=first.imagePrompt,
+                    character_desc=character_desc,
+                    user_id=user_id,
+                    art_style=art_style,
+                    world_context=world_context,
+                    bgm_mood=bgm_mood,
                 )
                 await db.storyboardscene.update(
-                    where={"id": sc.id},
-                    data={"imageUrl": selected_url, "imageStatus": "COMPLETED"},
+                    where={"id": first.id},
+                    data={"imageUrl": url, "imageStatus": "COMPLETED"},
                 )
-                logger.info(
-                    "장면 %d: type=%s → %s",
-                    sc.sceneOrder,
-                    scene_type,
-                    selected_url.split("/")[-1],
+                await db.storyboard.update(
+                    where={"id": storyboard_id},
+                    data={"heroFrameUrl": url},
                 )
             except Exception:
-                logger.exception("장면 이미지 선택 실패: %s", sc.id)
+                logger.exception("첫 장면 이미지 생성 실패")
                 await db.storyboardscene.update(
-                    where={"id": sc.id},
-                    data={
-                        "imageUrl": base_image_url,
-                        "imageStatus": "COMPLETED",
-                    },
+                    where={"id": first.id},
+                    data={"imageStatus": "FAILED"},
                 )
 
-        # 히어로 프레임 = 첫 장면 이미지
-        if db_scenes:
-            first_scene = await db.storyboardscene.find_first(
+        await notify(55, "첫 장면 완료, 나머지 병렬 생성 중...")
+
+        # 나머지 장면 이미지 생성 (병렬, 세마포어 제한)
+        async def _gen_scene_image(sc: object) -> None:
+            try:
+                url, _ = await generate_scene_image(
+                    image_prompt=sc.imagePrompt,
+                    character_desc=character_desc,
+                    user_id=user_id,
+                    reference_image_bytes=hero_bytes,
+                    art_style=art_style,
+                    world_context=world_context,
+                    bgm_mood=bgm_mood,
+                )
+                await db.storyboardscene.update(
+                    where={"id": sc.id},
+                    data={"imageUrl": url, "imageStatus": "COMPLETED"},
+                )
+            except Exception:
+                logger.exception("장면 이미지 생성 실패: %s", sc.id)
+                await db.storyboardscene.update(
+                    where={"id": sc.id},
+                    data={"imageStatus": "FAILED"},
+                )
+
+        # TTS 나레이션 생성 (병렬)
+        async def _gen_tts() -> None:
+            tts_scenes = await db.storyboardscene.find_many(
                 where={"storyboardId": storyboard_id},
                 order={"sceneOrder": "asc"},
             )
-            if first_scene and first_scene.imageUrl:
-                await db.storyboard.update(
-                    where={"id": storyboard_id},
-                    data={"heroFrameUrl": first_scene.imageUrl},
-                )
+            await generate_scene_narrations(
+                scenes=tts_scenes,
+                voice_id=voice_id,
+                voice_style=voice_style,
+                user_id=user_id,
+            )
 
-        await notify(55, "이미지 선택 완료")
-
-        # Step 4: TTS 나레이션 생성 (90-95%)
-        await notify(90, "나레이션 음성 생성 중...")
-        db_scenes_for_tts = await db.storyboardscene.find_many(
-            where={"storyboardId": storyboard_id},
-            order={"sceneOrder": "asc"},
-        )
-        await generate_scene_narrations(
-            scenes=db_scenes_for_tts,
-            voice_id=voice_id,
-            voice_style=voice_style,
-            user_id=user_id,
+        # 이미지(2~N번 장면) + TTS 동시 실행
+        image_tasks = [_gen_scene_image(sc) for sc in db_scenes[1:]]
+        await asyncio.gather(
+            asyncio.gather(*image_tasks),
+            _gen_tts(),
+            return_exceptions=True,
         )
 
-        # Step 5: 완료 여부 확인 (95-100%)
+        await notify(90, "이미지 + 나레이션 생성 완료")
+
+        # Step 5: 완료 여부 확인 (90-100%)
         failed_count = await db.storyboardscene.count(
             where={
                 "storyboardId": storyboard_id,
@@ -609,7 +618,8 @@ async def content_to_image_prompt(
     character_desc: str,
 ) -> str:
     """콘티 설명(한글)을 이미지 생성용 영문 프롬프트로 변환"""
-    async with httpx.AsyncClient(timeout=30) as client:
+    client = get_openai_client()
+    async with asyncio.timeout(30):
         resp = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={

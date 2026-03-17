@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from app.api import router as api_router
 from app.core.config import settings
 from app.core.database import connect_db, disconnect_db
+from app.core.http_client import close_clients
 from app.core.trend_manager import trend_manager
 
 
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI):
     trend_manager.start()
     yield
     trend_manager.stop()
+    await close_clients()
     await disconnect_db()
 
 
