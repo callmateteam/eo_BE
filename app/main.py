@@ -153,6 +153,22 @@ AI 기반 숏폼 영상 생성 플랫폼 백엔드 API
 - **aspect_ratio enum**: `9:16`(세로, 기본값) · `16:9`(가로) · `1:1`(정사각)
 - **duration**: 5~10초
 
+#### Video Edit (`/api/storyboards/{id}/...`) — tag: `video-edit`
+| Method | Path | Summary | 인증 | 상태코드 |
+|--------|------|---------|------|---------|
+| GET | `/{id}/edit` | 편집 상태 조회 (없으면 자동 초기화) | O | 200, 401, 404 |
+| PATCH | `/{id}/edit` | 편집 저장 (version++ + 히스토리 자동 생성) | O | 200, 401, 404 |
+| POST | `/{id}/edit/undo` | 되돌리기 (최대 50단계) | O | 200, 401, 409 |
+| POST | `/{id}/edit/tts` | 커스텀 TTS 생성 (텍스트 → audio_url) | O | 200, 401, 500 |
+| POST | `/{id}/thumbnail` | 썸네일 프레임 추출 (시간 지정) | O | 200, 401, 404, 500 |
+| POST | `/{id}/render` | 최종 렌더링 시작 (편집 적용) | O | 202, 401, 404 |
+
+- **편집 기능**: 씬 순서 변경, 트림(0.001초 정밀도), 배속(0.5~2.0x), 전환 효과(5종), 구간 음소거/볼륨, BGM, 자막(폰트8종/색상/배경/그림자/위치/애니메이션3종), 커스텀 TTS 오버레이, 썸네일
+- **되돌리기**: PATCH마다 히스토리 자동 저장, POST undo로 복원
+- **자막 폰트**: NanumGothic, NanumMyeongjo, NanumSquareRound, NanumBarunGothic, MapoFlowerIsland, GmarketSans, Pretendard, DoHyeon
+- **전환 효과**: none, fade, dissolve, slide_left, slide_up, wipe
+- **자막 애니메이션**: none, typing, popup, fadein
+
 #### Dashboard (`/api/dashboard`) — tag: `dashboard`
 | Method | Path | Summary | 인증 | 상태코드 |
 |--------|------|---------|------|---------|
@@ -210,6 +226,13 @@ AI 기반 숏폼 영상 생성 플랫폼 백엔드 API
 - 상태: GENERATING → COMPLETED / FAILED
 ```json
 {"id": "uuid", "progress": 45, "step": "시작 프레임 생성 중...", "status": "GENERATING"}
+```
+
+#### `ws://{host}/api/storyboards/ws/{storyboard_id}/render` — 렌더링 진행률 (쿠키 인증)
+- 편집 적용 최종 렌더링 진행률 (트림→전환→오디오→TTS→BGM→자막→업로드)
+- RENDERING → RENDER_READY / FAILED, 완료 시 자동 종료
+```json
+{"storyboard_id": "uuid", "status": "RENDERING", "progress": 65, "step": "자막 입히는 중..."}
 ```
 
 ---

@@ -9,6 +9,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.project import router as project_router
 from app.api.storyboard import router as storyboard_router
 from app.api.video import router as video_router
+from app.api.video_edit import router as video_edit_router
 from app.api.ws import router as ws_router
 
 router = APIRouter()
@@ -19,6 +20,7 @@ router.include_router(dashboard_router)
 router.include_router(project_router)
 router.include_router(storyboard_router)
 router.include_router(video_router)
+router.include_router(video_edit_router)
 router.include_router(ws_router)
 
 

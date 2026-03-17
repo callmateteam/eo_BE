@@ -288,9 +288,202 @@ model Project {
 
 ---
 
+---
+
+## 영상 편집 기능 스펙 (4단계: VIDEO_GENERATION 내 편집)
+
+> 영상 생성이 완료된 후, 사용자가 최종 영상을 편집할 수 있는 기능.
+> 편집 상태는 DB에 JSON으로 저장되며, 최종 렌더링은 ffmpeg로 처리.
+> 되돌리기(Undo)는 히스토리 스냅샷 기반.
+
+### DB 모델 추가 (prisma/schema.prisma)
+
+```prisma
+model VideoEdit {
+  id             String   @id @default(uuid())
+  storyboardId   String   @unique
+  storyboard     Storyboard @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
+  editData       Json     // 전체 편집 상태 (아래 JSON 구조 참고)
+  version        Int      @default(1)
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model VideoEditHistory {
+  id         String   @id @default(uuid())
+  editId     String
+  version    Int
+  editData   Json     // 해당 시점의 전체 스냅샷
+  createdAt  DateTime @default(now())
+
+  @@index([editId, version])
+}
+```
+
+### editData JSON 구조
+
+```json
+{
+  "scenes": [
+    {
+      "scene_id": "uuid",
+      "order": 1,
+      "trim_start": 0.000,
+      "trim_end": 5.000,
+      "speed": 1.0,
+      "transition": "none",
+      "audio": {
+        "mute_ranges": [[1.200, 2.500]],
+        "volume_ranges": [{"start": 0.0, "end": 5.0, "volume": 1.0}]
+      }
+    }
+  ],
+  "bgm": {
+    "preset": "energetic",
+    "custom_url": null,
+    "volume": 0.2
+  },
+  "subtitles": [
+    {
+      "scene_id": "uuid",
+      "text": "자막 텍스트",
+      "start": 0.000,
+      "end": 3.000,
+      "style": {
+        "font": "NanumGothic",
+        "font_size": 24,
+        "color": "#FFFFFF",
+        "shadow": {"enabled": true, "color": "#000000", "offset": 2},
+        "background": {"enabled": true, "color": "#000000", "opacity": 0.7},
+        "position": "bottom",
+        "position_y": null,
+        "animation": "none",
+        "per_char_sizes": null
+      }
+    }
+  ],
+  "tts_overlays": [
+    {
+      "id": "uuid",
+      "text": "사용자가 입력한 TTS 텍스트",
+      "voice_id": "alloy",
+      "voice_style": "",
+      "start": 2.500,
+      "scene_id": "uuid",
+      "audio_url": null
+    }
+  ],
+  "thumbnail_time": 0.0
+}
+```
+
+### API 엔드포인트
+
+#### 편집 상태 CRUD
+- `GET /api/storyboards/{id}/edit` — 편집 상태 조회 (없으면 초기값 자동 생성)
+- `PATCH /api/storyboards/{id}/edit` — 편집 저장 (version 증가 + 히스토리 자동 생성)
+- `POST /api/storyboards/{id}/edit/undo` — 한 단계 되돌리기 (이전 version의 히스토리 복원)
+
+#### 커스텀 TTS 생성
+- `POST /api/storyboards/{id}/edit/tts` — 사용자 입력 텍스트로 TTS 생성 → audio_url 반환
+  - body: `{ "text": "...", "voice_id": "alloy", "voice_style": "" }`
+  - 응답: `{ "audio_url": "s3://...", "duration": 3.5 }`
+
+#### 최종 렌더링
+- `POST /api/storyboards/{id}/render` — editData 기반 최종 영상 렌더링 (202 Accepted)
+- `WS /api/storyboards/ws/{id}/render` — 렌더링 진행률 (ffmpeg 단계별)
+
+#### 썸네일 추출
+- `POST /api/storyboards/{id}/thumbnail` — 지정 시간의 프레임을 썸네일로 추출
+  - body: `{ "time": 2.5 }`
+  - 응답: `{ "thumbnail_url": "s3://..." }`
+
+### 편집 기능 상세
+
+#### 1. 타임라인 (0.001ms 정밀도)
+- `trim_start`, `trim_end`: 씬별 시작/끝점 (float, 소수점 3자리)
+- 프론트에서 타임라인 UI, 백엔드는 ffmpeg `-ss`/`-to` 옵션으로 처리
+
+#### 2. 씬 순서 변경
+- `editData.scenes[].order` 값 변경
+- 프론트: 드래그앤드롭, 백엔드: order 기준 concat
+
+#### 3. 씬 트림/컷
+- `trim_start`, `trim_end` 조절
+- ffmpeg: `-ss {trim_start} -to {trim_end}`
+
+#### 4. 씬 간 전환 효과 (5종)
+- `transition` 값: `none`, `fade`, `dissolve`, `slide_left`, `slide_up`, `wipe`
+- ffmpeg: `xfade` 필터 (duration=0.5초 기본)
+
+#### 5. 배속 조절
+- `speed`: 0.5 ~ 2.0
+- ffmpeg: `setpts={1/speed}*PTS` + `atempo={speed}`
+
+#### 6. 구간 음소거 / 소리 증폭
+- `mute_ranges`: [[시작, 끝], ...] — 해당 구간 volume=0
+- `volume_ranges`: [{"start", "end", "volume"}] — 구간별 볼륨 (0.0~3.0)
+- ffmpeg: `volume` 필터 + `enable='between(t,start,end)'`
+
+#### 7. BGM 변경
+- `bgm.preset`: 프리셋 선택 (energetic, calm, dramatic, happy, sad, mysterious, epic, romantic, funny, horror)
+- `bgm.custom_url`: 사용자 업로드 BGM (추후)
+- `bgm.volume`: 0.0 ~ 1.0
+
+#### 8. 자막 편집
+- **폰트 8종**: NanumGothic, NanumMyeongjo, NanumSquareRound, NanumBarunGothic, MapoFlowerIsland, GmarketSans, Pretendard, DoHyeon
+- **글자 색상**: hex color (`#FFFFFF`)
+- **글자 사이즈**: 정수 (12~72), `per_char_sizes`로 글자별 개별 사이즈 지정 가능
+- **자막 배경**: enabled(on/off), color(hex), opacity(0.0~1.0)
+- **그림자**: enabled(on/off), color(hex), offset(1~5px)
+- **위치**: `position` = top/center/bottom 또는 `position_y` = 자유 배치 (0~100%)
+- ffmpeg: ASS 자막 포맷으로 변환 → `subtitles` 필터
+
+#### 9. 자막 애니메이션 (3종)
+- `animation` 값: `none`, `typing`, `popup`, `fadein`
+- ffmpeg ASS: `\fad`, `\move`, `\t` 태그로 구현
+
+#### 10. 커스텀 TTS 오버레이
+- 사용자가 원하는 텍스트를 입력 → TTS 생성 → 원하는 시점에 삽입
+- `tts_overlays[].start`: 삽입 시작 시간
+- `tts_overlays[].audio_url`: 생성된 TTS MP3 URL
+- 기존 나레이션과 별개로 추가 가능
+- ffmpeg: `adelay` 필터로 시점 맞춤 믹스
+
+#### 11. 썸네일 선택
+- `thumbnail_time`: 영상 내 특정 시간 (초)
+- ffmpeg: `-ss {time} -frames:v 1` 으로 프레임 추출 → S3 업로드
+
+### 렌더링 파이프라인 (ffmpeg)
+
+```
+1. 씬별 트림 + 배속 적용
+2. 씬 순서대로 전환 효과 적용하며 concat
+3. 구간별 음소거/볼륨 조절
+4. TTS 오버레이 믹스 (시점별 adelay)
+5. BGM 믹스 (TTS 있으면 자동 덕킹)
+6. ASS 자막 번인 (폰트/색상/배경/그림자/애니메이션)
+7. 썸네일 프레임 추출
+8. S3 업로드 → finalVideoUrl 업데이트
+```
+
+### 되돌리기 (Undo) 로직
+
+- `PATCH /edit` 호출 시마다 현재 editData를 VideoEditHistory에 저장 + version++
+- `POST /edit/undo` 호출 시 version-1의 히스토리에서 editData 복원
+- 최대 50단계 히스토리 유지 (초과 시 가장 오래된 것 삭제)
+
+---
+
 ### 구현 순서 (세션별 1단계씩)
 
 1. **DB 스키마 변경**: Project 모델에 currentStage, customCharacterId, storyboardId, idea 추가 → prisma migrate
 2. **프로젝트 CRUD 확장**: PATCH API 추가, 리스트에 썸네일/캐릭터명 포함, 2가지 생성 경로 분기
 3. **단계 트래킹 로직**: 각 단계 완료 시 currentStage 업데이트, 수정 시 해당 단계부터 재개
 4. **프로젝트-스토리보드 연결**: Project.storyboardId 연결, 영상 완료 시 Project 상태 업데이트
+5. **영상 편집 DB + API**: VideoEdit/VideoEditHistory 모델 + 편집 CRUD + Undo API
+6. **커스텀 TTS API**: 사용자 입력 텍스트 → TTS 생성 → audio_url 반환
+7. **렌더링 파이프라인**: editData → ffmpeg 렌더링 (트림/전환/배속/오디오/자막/썸네일)
+8. **렌더링 WS**: 렌더링 진행률 실시간 전송

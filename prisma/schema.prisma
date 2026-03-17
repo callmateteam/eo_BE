@@ -29,6 +29,7 @@ model User {
   refreshTokens    RefreshToken[]
   customCharacters CustomCharacter[]
   storyboards      Storyboard[]
+  videoEdits       VideoEdit[]
 
   @@map("users")
 }
@@ -181,6 +182,7 @@ model Storyboard {
   customCharacter    CustomCharacter? @relation(fields: [customCharacterId], references: [id])
   scenes             StoryboardScene[]
   project            Project?
+  videoEdit          VideoEdit?
 
   @@index([userId])
   @@map("storyboards")
@@ -220,6 +222,36 @@ model StoryboardScene {
 
   @@index([storyboardId])
   @@map("storyboard_scenes")
+}
+
+model VideoEdit {
+  id           String   @id @default(uuid()) @db.Uuid
+  storyboardId String   @unique @map("storyboard_id") @db.Uuid
+  editData     Json     @map("edit_data")
+  version      Int      @default(1)
+  userId       String   @map("user_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  storyboard   Storyboard @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  histories    VideoEditHistory[]
+
+  @@index([userId])
+  @@map("video_edits")
+}
+
+model VideoEditHistory {
+  id        String   @id @default(uuid()) @db.Uuid
+  editId    String   @map("edit_id") @db.Uuid
+  version   Int
+  editData  Json     @map("edit_data")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  edit      VideoEdit @relation(fields: [editId], references: [id], onDelete: Cascade)
+
+  @@index([editId, version])
+  @@map("video_edit_histories")
 }
 
 model RefreshToken {
