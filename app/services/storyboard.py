@@ -20,31 +20,42 @@ logger = logging.getLogger(__name__)
 # ── GPT 콘티 생성 프롬프트 (토큰 최적화) ──
 
 STORYBOARD_SYSTEM = """\
-Short-form video storyboard creator.
+Short-form video storyboard creator for image-to-video pipeline.
 Create scene cuts from character + idea.
 
 Rules:
 - Total ≤ 60s, each scene 3-10s
 - Output ONLY valid JSON array
 - 3-5 scenes (strictly, never more than 5)
-- imagePrompt: English, max 40 words. Describe: (1) character action, \
-(2) background/location, (3) objects/props. NO text/letters/words
+- imagePrompt: English, max 40 words. Describe a STATIC opening \
+freeze-frame (NOT motion): (1) character POSE/POSITION, \
+(2) background/location matching world context, (3) key props. \
+The character should be in a natural starting pose with room for \
+implied motion. NO text/letters/words in the image.
+- motionPrompt: English, max 30 words. Describe ONLY the motion/action \
+that should happen in this scene. Do NOT repeat what's visible in \
+the image. Focus on: movement direction, speed, gestures, expressions.
 - title/content: Korean, concise
 - duration: action=short, dialogue=longer
-- hasCharacter: true if the character appears in this scene, false otherwise
-- secondaryCharacter: name of another character in this scene (null if none). \
-Only set if the idea mentions another character by name.
-- narration: Korean TTS text for this scene. null if silent
+- hasCharacter: true if the character appears in this scene
+- secondaryCharacter: name of another character (null if none). \
+Only if the idea mentions another character by name.
+- narration: Korean TTS text. null if silent
 - narrationStyle: "character"|"narrator"|"none"
-- bgmMood: overall BGM mood (first scene only): epic/funny/calm/tense/sad/upbeat/mysterious
+- bgmMood: overall BGM mood (first scene only): \
+epic/funny/calm/tense/sad/upbeat/mysterious
+- Vary visual composition: mix close-ups, medium, wide shots across scenes.
 
-[{"title":"","content":"","imagePrompt":"","duration":5.0,"hasCharacter":true,\
-"secondaryCharacter":null,"narration":"","narrationStyle":"character","bgmMood":"funny"}]"""
+[{"title":"","content":"","imagePrompt":"","motionPrompt":"",\
+"duration":5.0,"hasCharacter":true,"secondaryCharacter":null,\
+"narration":"","narrationStyle":"character","bgmMood":"funny"}]"""
 
 STORYBOARD_USER = """\
 캐릭터: {character_desc}
+세계관/배경: {world_context}
+아트 스타일: {art_style}
 아이디어: {idea}
-60초 이내 숏폼 콘티 생성."""
+60초 이내 숏폼 콘티 생성. 배경은 세계관에 맞게 구성."""
 
 # 이미지 동시 요청 제한 (rate limit 방지) - 지연 초기화
 _IMAGE_SEMAPHORE: asyncio.Semaphore | None = None
@@ -61,6 +72,9 @@ def _get_semaphore() -> asyncio.Semaphore:
 async def generate_scenes_with_gpt(
     character_desc: str,
     idea: str,
+    *,
+    world_context: str = "",
+    art_style: str = "",
 ) -> tuple[list[dict], str | None]:
     """GPT-4o-mini로 콘티 장면 분할 생성 (토큰 절약)"""
     async with httpx.AsyncClient(timeout=60) as client:
@@ -72,7 +86,7 @@ async def generate_scenes_with_gpt(
             },
             json={
                 "model": "gpt-4o-mini",
-                "max_tokens": 1500,
+                "max_tokens": 2000,
                 "temperature": 0.7,
                 "response_format": {"type": "json_object"},
                 "messages": [
@@ -82,6 +96,8 @@ async def generate_scenes_with_gpt(
                         "content": STORYBOARD_USER.format(
                             character_desc=character_desc,
                             idea=idea,
+                            world_context=world_context or "일반적인 배경",
+                            art_style=art_style or "anime style",
                         ),
                     },
                 ],
@@ -130,6 +146,7 @@ async def generate_scenes_with_gpt(
                     "title": str(s.get("title", "장면"))[:100],
                     "content": str(s.get("content", ""))[:2000],
                     "imagePrompt": str(s.get("imagePrompt", ""))[:200],
+                    "motionPrompt": str(s.get("motionPrompt", ""))[:200],
                     "duration": min(max(float(s.get("duration", 5.0)), 2.0), 10.0),
                     "hasCharacter": bool(s.get("hasCharacter", True)),
                     "secondaryCharacter": str(s.get("secondaryCharacter") or "")[:100] or None,
@@ -154,30 +171,57 @@ async def generate_scene_image(
     user_id: str,
     *,
     reference_image_bytes: bytes | None = None,
+    art_style: str = "",
+    world_context: str = "",
+    bgm_mood: str | None = None,
 ) -> tuple[str, bytes]:
-    """GPT 이미지 생성으로 장면 시작 프레임 생성 → S3 업로드 → (URL, 이미지 bytes) 반환
+    """GPT 이미지 생성으로 장면 시작 프레임 생성 → S3 업로드
 
-    생성된 이미지는 콘티 썸네일 겸 Veo image-to-video 시작 프레임으로 사용됩니다.
-    reference_image_bytes가 제공되면 edits API로 캐릭터 일관성을 유지합니다.
+    캐릭터 일관성을 최우선으로:
+    - 캐릭터 외형 설명 고정 (veoPrompt/promptFeatures)
+    - reference_image_bytes가 있으면 edits API 사용
+    - 아트 스타일은 캐릭터 데이터에서 동적 결정
     """
+
+    # 스타일: 캐릭터 데이터 기반 (하드코딩 제거)
+    if art_style:
+        style_text = art_style
+    else:
+        style_text = "Japanese anime style, hand-drawn cel animation look"
+
+    # 조명: 분위기 기반
+    mood_lighting = {
+        "epic": "dramatic golden hour lighting with lens flare",
+        "funny": "bright cheerful lighting with vibrant colors",
+        "calm": "soft natural lighting with warm tones",
+        "tense": "low-key dramatic lighting with deep shadows",
+        "sad": "overcast muted lighting with cool blue tones",
+        "mysterious": "moody atmospheric lighting with fog",
+    }
+    lighting = mood_lighting.get(bgm_mood or "", "natural lighting")
+
+    # 배경 컨텍스트
+    bg_text = ""
+    if world_context:
+        bg_text = f"Background setting: {world_context.split(',')[0].strip()}. "
+
     full_prompt = (
         f"{character_desc}. "
         f"Scene: {image_prompt}. "
-        "Japanese anime style, hand-drawn cel animation look. "
-        "Warm natural lighting, soft shadows. "
-        "Keep the character's appearance exactly consistent with the reference image. "
-        "The background and setting must match the scene description exactly. "
-        "Avoid photorealistic or 3D render look. "
-        "IMPORTANT: Do not render any text, letters, words, or written characters in the image. "
-        "Replace any text with simple geometric shapes, symbols, or abstract patterns."
+        f"{bg_text}"
+        f"{style_text}. {lighting}. "
+        "The character is in a natural starting pose with room for "
+        "implied motion, NOT mid-action. "
+        "Keep the character's appearance EXACTLY consistent: same face, "
+        "same hair, same outfit, same proportions as described. "
+        "CRITICAL: Do not render any text, letters, or written characters. "
+        "Replace any text with symbols or abstract patterns."
     )[:4000]
 
     async with _get_semaphore():
         if reference_image_bytes:
-            # edits API로 히어로 프레임 참조하여 캐릭터 일관성 유지
             img_data = await _generate_with_edit(full_prompt, reference_image_bytes)
         else:
-            # 첫 장면: 일반 생성
             img_data = await _generate_new(full_prompt)
 
     s3_url = await asyncio.to_thread(
@@ -203,7 +247,7 @@ async def _generate_new(prompt: str) -> bytes:
                 "model": "gpt-image-1",
                 "prompt": prompt,
                 "n": 1,
-                "size": "1024x1024",
+                "size": "1024x1536",
                 "quality": "medium",
             },
         )
@@ -251,7 +295,7 @@ async def _generate_with_edit(prompt: str, reference_bytes: bytes) -> bytes:
 
 
 class CharacterInfo:
-    """캐릭터 설명 + 음성 설정 + 원본 이미지 URL"""
+    """캐릭터 설명 + 음성 설정 + 원본 이미지 + 세계관/스타일"""
 
     def __init__(
         self,
@@ -259,11 +303,15 @@ class CharacterInfo:
         voice_id: str,
         voice_style: str,
         image_url: str | None = None,
+        world_context: str = "",
+        art_style: str = "",
     ) -> None:
         self.description = description
         self.voice_id = voice_id
         self.voice_style = voice_style
         self.image_url = image_url
+        self.world_context = world_context
+        self.art_style = art_style
 
 
 async def get_character_description(
@@ -284,16 +332,35 @@ async def get_character_info(
         char = await db.character.find_unique(where={"id": character_id})
         if not char:
             raise ValueError("캐릭터를 찾을 수 없습니다")
-        # 영문 promptFeatures를 기본으로 사용 (이미지 생성 최적화)
         desc = char.promptFeatures or char.veoPrompt or ""
-        return CharacterInfo(desc, char.voiceId, char.voiceStyle, char.imageUrl)
+        return CharacterInfo(
+            description=desc,
+            voice_id=char.voiceId,
+            voice_style=char.voiceStyle,
+            image_url=char.imageUrl,
+            world_context=getattr(char, "worldContext", "") or "",
+            art_style=getattr(char, "artStyle", "") or "",
+        )
     if custom_character_id:
         cc = await db.customcharacter.find_unique(where={"id": custom_character_id})
         if not cc:
             raise ValueError("커스텀 캐릭터를 찾을 수 없습니다")
         if cc.status != "COMPLETED" or not cc.veoPrompt:
             raise ValueError("아직 생성 중이거나 실패한 캐릭터입니다")
-        return CharacterInfo(cc.veoPrompt, cc.voiceId, cc.voiceStyle)
+        from app.schemas.custom_character import STYLE_PROMPT, CharacterStyle
+
+        style_prompt = ""
+        try:
+            style_prompt = STYLE_PROMPT.get(CharacterStyle(cc.style), "")
+        except ValueError:
+            pass
+        return CharacterInfo(
+            description=cc.veoPrompt,
+            voice_id=cc.voiceId,
+            voice_style=cc.voiceStyle,
+            world_context="",
+            art_style=style_prompt,
+        )
     raise ValueError("캐릭터를 선택해주세요")
 
 
@@ -361,6 +428,8 @@ async def process_storyboard(
     voice_style: str = "",
     character_image_url: str | None = None,
     project_id: str | None = None,
+    world_context: str = "",
+    art_style: str = "",
 ) -> None:
     """콘티 생성 전체 파이프라인 (백그라운드)"""
 
@@ -371,7 +440,12 @@ async def process_storyboard(
     try:
         # Step 1: GPT 장면 분할 (0-30%)
         await notify(10, "AI가 장면을 구성하고 있습니다...")
-        scenes, bgm_mood = await generate_scenes_with_gpt(character_desc, idea)
+        scenes, bgm_mood = await generate_scenes_with_gpt(
+            character_desc,
+            idea,
+            world_context=world_context,
+            art_style=art_style,
+        )
         await notify(30, f"{len(scenes)}개 장면 생성 완료")
 
         # bgmMood 저장
@@ -401,6 +475,7 @@ async def process_storyboard(
                     "title": scene["title"],
                     "content": scene["content"],
                     "imagePrompt": scene["imagePrompt"],
+                    "motionPrompt": scene.get("motionPrompt", ""),
                     "duration": scene["duration"],
                     "hasCharacter": scene["hasCharacter"],
                     "secondaryCharacter": sec_name,

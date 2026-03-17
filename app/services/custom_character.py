@@ -24,17 +24,23 @@ Analyze images and description, output JSON with two fields.
 
 Rules:
 - Output ONLY valid JSON: {"veoPrompt":"...","voiceStyle":"..."}
-- veoPrompt: max 40 words, English, comma-separated phrases
-  height/build, hair, eyes, outfit, marks. No style/ratio.
+- veoPrompt: max 60 words, English, comma-separated phrases.
+  MUST include ALL of these for character consistency:
+  (1) height/build, (2) hair color+style+length,
+  (3) eye color+shape, (4) skin tone,
+  (5) outfit/clothing details, (6) distinctive marks/accessories,
+  (7) body proportions. No style/ratio words.
 - voiceStyle: max 25 words, English, TTS voice instruction
   tone, pitch, energy, Korean speaking style for this character
 
 Example:
-{"veoPrompt":"170cm slim young woman, long silver hair, red eyes, black coat",\
+{"veoPrompt":"170cm slim young woman, waist-length silver hair with side bangs, \
+sharp red eyes, fair skin, fitted black leather coat over white blouse, \
+silver necklace, slender build with long legs",\
 "voiceStyle":"Cool confident young woman, speaks Korean with elegant authority"}"""
 
 
-def _truncate_prompt(text: str, max_words: int = 40) -> str:
+def _truncate_prompt(text: str, max_words: int = 60) -> str:
     """veoPrompt를 max_words 이하로 잘라냄"""
     words = text.split()
     if len(words) <= max_words:
@@ -99,7 +105,7 @@ async def analyze_images_with_gpt(
                                 "type": "image_url",
                                 "image_url": {
                                     "url": f"data:{media_2};base64,{b64_2}",
-                                    "detail": "low",
+                                    "detail": "auto",
                                 },
                             },
                         ],

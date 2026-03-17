@@ -218,10 +218,11 @@ async def _generate_scene_video(
             # 캐릭터 정보에서 시드 데이터 추출
             char_info = await _get_character_seed_data(storyboard_id)
 
-            # Hailuo 프롬프트 최적화 (자연스러운 동작 키워드 자동 삽입)
+            # Hailuo 프롬프트 v2 (motionPrompt 우선, 이미지 내용 반복 제거)
             hailuo_result = build_hailuo_prompt(
                 scene_content=scene.content,
                 image_prompt=getattr(scene, "imagePrompt", None),
+                motion_prompt=getattr(scene, "motionPrompt", None),
                 character_name=char_info.get("name", ""),
                 world_context=char_info.get("world_context", ""),
                 art_style=char_info.get("art_style", ""),

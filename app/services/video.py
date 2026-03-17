@@ -178,7 +178,7 @@ class HailuoVideoGenerator(VideoGenerator):
 
         body: dict = {
             "prompt": prompt,
-            "prompt_optimizer": True,
+            "prompt_optimizer": False,
         }
 
         if image_url:

@@ -203,6 +203,7 @@ model StoryboardScene {
   title          String           @db.VarChar(100)
   content        String           @db.VarChar(2000)
   imagePrompt    String           @map("image_prompt") @db.VarChar(2000)
+  motionPrompt   String           @default("") @map("motion_prompt") @db.VarChar(500)
   imageUrl       String?          @map("image_url") @db.VarChar(500)
   imageStatus    SceneImageStatus @default(PENDING) @map("image_status")
   hasCharacter   Boolean          @default(true) @map("has_character")
