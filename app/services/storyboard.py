@@ -252,7 +252,11 @@ async def _generate_new(prompt: str) -> bytes:
                 "quality": "medium",
             },
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            logger.error(
+                "이미지 생성 API 실패 (%s): %s", resp.status_code, resp.text[:500]
+            )
+            resp.raise_for_status()
         result = resp.json()["data"][0]
 
     if "b64_json" in result:
@@ -284,7 +288,11 @@ async def _generate_with_edit(prompt: str, reference_bytes: bytes) -> bytes:
                 "image": ("reference.png", reference_bytes, "image/png"),
             },
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            logger.error(
+                "이미지 편집 API 실패 (%s): %s", resp.status_code, resp.text[:500]
+            )
+            resp.raise_for_status()
         result = resp.json()["data"][0]
 
     if "b64_json" in result:
