@@ -368,6 +368,7 @@ async def get_character_info(
             description=cc.veoPrompt,
             voice_id=cc.voiceId,
             voice_style=cc.voiceStyle,
+            image_url=cc.imageUrl1 or cc.imageUrl2 or None,
             world_context="",
             art_style=style_prompt,
         )
@@ -529,10 +530,22 @@ async def process_storyboard(
                 )
             except Exception:
                 logger.exception("첫 장면 이미지 생성 실패")
-                await db.storyboardscene.update(
-                    where={"id": first.id},
-                    data={"imageStatus": "FAILED"},
-                )
+                # fallback: 캐릭터 기존 이미지를 썸네일로 사용
+                if character_image_url:
+                    logger.info("fallback: 캐릭터 이미지를 썸네일로 사용 (%s)", first.id)
+                    await db.storyboardscene.update(
+                        where={"id": first.id},
+                        data={"imageUrl": character_image_url, "imageStatus": "COMPLETED"},
+                    )
+                    await db.storyboard.update(
+                        where={"id": storyboard_id},
+                        data={"heroFrameUrl": character_image_url},
+                    )
+                else:
+                    await db.storyboardscene.update(
+                        where={"id": first.id},
+                        data={"imageStatus": "FAILED"},
+                    )
 
         await notify(55, "첫 장면 완료, 나머지 병렬 생성 중...")
 
@@ -554,10 +567,18 @@ async def process_storyboard(
                 )
             except Exception:
                 logger.exception("장면 이미지 생성 실패: %s", sc.id)
-                await db.storyboardscene.update(
-                    where={"id": sc.id},
-                    data={"imageStatus": "FAILED"},
-                )
+                # fallback: 캐릭터 기존 이미지를 썸네일로 사용
+                if character_image_url:
+                    logger.info("fallback: 캐릭터 이미지를 썸네일로 사용 (%s)", sc.id)
+                    await db.storyboardscene.update(
+                        where={"id": sc.id},
+                        data={"imageUrl": character_image_url, "imageStatus": "COMPLETED"},
+                    )
+                else:
+                    await db.storyboardscene.update(
+                        where={"id": sc.id},
+                        data={"imageStatus": "FAILED"},
+                    )
 
         # TTS 나레이션 생성 (병렬)
         async def _gen_tts() -> None:
