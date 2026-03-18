@@ -229,26 +229,23 @@ async def generate_scene_image(
     character_desc: str,
     user_id: str,
     *,
-    reference_image_bytes: bytes | None = None,
+    reference_image_url: str | None = None,
     art_style: str = "",
     world_context: str = "",
     bgm_mood: str | None = None,
+    character_name: str = "",
 ) -> tuple[str, bytes]:
-    """GPT 이미지 생성으로 장면 시작 프레임 생성 → S3 업로드
+    """FLUX로 장면 시작 프레임 생성 → S3 업로드
 
-    캐릭터 일관성을 최우선으로:
-    - 캐릭터 외형 설명 고정 (veoPrompt/promptFeatures)
-    - reference_image_bytes가 있으면 edits API 사용
-    - 아트 스타일은 캐릭터 데이터에서 동적 결정
+    - 첫 장면 (reference 없음): FLUX dev (text-to-image)
+    - 나머지 장면 (reference 있음): FLUX Kontext (image-to-image)
+    - 저작권 필터 없음 → 캐릭터 이름 그대로 사용 가능
     """
 
-    # 스타일: 캐릭터 데이터 기반 (하드코딩 제거)
-    if art_style:
-        style_text = art_style
-    else:
-        style_text = "Japanese anime style, hand-drawn cel animation look"
+    # 스타일
+    style_text = art_style or "Japanese anime style, clean digital cel animation look"
 
-    # 조명: 분위기 기반
+    # 조명
     mood_lighting = {
         "epic": "dramatic golden hour lighting with lens flare",
         "funny": "bright cheerful lighting with vibrant colors",
@@ -264,7 +261,11 @@ async def generate_scene_image(
     if world_context:
         bg_text = f"Background setting: {world_context.split(',')[0].strip()}. "
 
+    # 캐릭터 이름을 프롬프트에 포함 (FLUX는 저작권 필터 없음)
+    name_text = f"{character_name}. " if character_name else ""
+
     full_prompt = (
+        f"{name_text}"
         f"{character_desc}. "
         f"Scene: {image_prompt}. "
         f"{bg_text}"
@@ -273,101 +274,98 @@ async def generate_scene_image(
         "implied motion, NOT mid-action. "
         "Keep the character's appearance EXACTLY consistent: same face, "
         "same hair, same outfit, same proportions as described. "
-        "CRITICAL: Do not render any text, letters, or written characters. "
-        "Replace any text with symbols or abstract patterns."
+        "CRITICAL: Do not render any text, letters, or written characters."
     )[:4000]
 
-    # 저작권 캐릭터/시리즈 이름 제거 (OpenAI moderation 차단 방지)
-    full_prompt = _strip_copyright_names(full_prompt)
-
     async with _get_semaphore():
-        if reference_image_bytes:
-            img_data = await _generate_with_edit(full_prompt, reference_image_bytes)
+        if reference_image_url:
+            img_data = await _generate_with_flux_kontext(full_prompt, reference_image_url)
         else:
-            img_data = await _generate_new(full_prompt)
+            img_data = await _generate_with_flux_dev(full_prompt)
 
     s3_url = await asyncio.to_thread(
         upload_image,
         img_data,
         user_id,
-        content_type="image/png",
+        content_type="image/jpeg",
         folder="storyboard-scenes",
     )
     return s3_url, img_data
 
 
-async def _generate_new(prompt: str) -> bytes:
-    """새 이미지 생성 (generations API)"""
+async def _generate_with_flux_dev(prompt: str) -> bytes:
+    """FLUX dev text-to-image (첫 장면용, 레퍼런스 없음)"""
     client = get_openai_client()
     async with asyncio.timeout(120):
         resp = await client.post(
-            "https://api.openai.com/v1/images/generations",
+            "https://fal.run/fal-ai/flux/dev",
             headers={
-                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                "Authorization": f"Key {settings.FAL_KEY}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": "gpt-image-1",
                 "prompt": prompt,
-                "n": 1,
-                "size": "1024x1536",
-                "quality": "high",
+                "image_size": {"width": 1024, "height": 1536},
+                "num_images": 1,
+                "num_inference_steps": 28,
+                "guidance_scale": 3.5,
             },
         )
         if resp.status_code != 200:
             logger.error(
-                "이미지 생성 API 실패 (%s): %s", resp.status_code, resp.text[:500]
+                "FLUX dev 이미지 생성 실패 (%s): %s", resp.status_code, resp.text[:500]
             )
             resp.raise_for_status()
-        result = resp.json()["data"][0]
+        result = resp.json()
 
-    if "b64_json" in result:
-        return base64.b64decode(result["b64_json"])
+    image_url = result["images"][0]["url"]
+    logger.info("FLUX dev 이미지 생성 완료: %s", image_url)
 
+    # 이미지 다운로드
     dl = get_openai_client()
-    img_resp = await dl.get(result["url"])
+    img_resp = await dl.get(image_url)
     img_resp.raise_for_status()
     return img_resp.content
 
 
-async def _generate_with_edit(prompt: str, reference_bytes: bytes) -> bytes:
-    """히어로 프레임을 참조하여 편집 API로 캐릭터 일관성 유지 (multipart/form-data)"""
+async def _generate_with_flux_kontext(prompt: str, reference_image_url: str) -> bytes:
+    """FLUX Kontext image-to-image (나머지 장면용, 히어로 프레임 참조)"""
     client = get_openai_client()
     async with asyncio.timeout(120):
         resp = await client.post(
-            "https://api.openai.com/v1/images/edits",
+            "https://fal.run/fal-ai/flux-pro/kontext",
             headers={
-                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                "Authorization": f"Key {settings.FAL_KEY}",
+                "Content-Type": "application/json",
             },
-            data={
-                "model": "gpt-image-1",
+            json={
                 "prompt": prompt,
-                "n": "1",
-                "size": "1024x1536",
-                "quality": "high",
-            },
-            files={
-                "image": ("reference.png", reference_bytes, "image/png"),
+                "image_url": reference_image_url,
+                "guidance_scale": 3.5,
+                "num_images": 1,
+                "output_format": "jpeg",
+                "safety_tolerance": "6",
             },
         )
         if resp.status_code != 200:
             logger.error(
-                "이미지 편집 API 실패 (%s): %s", resp.status_code, resp.text[:500]
+                "FLUX Kontext 이미지 생성 실패 (%s): %s", resp.status_code, resp.text[:500]
             )
             resp.raise_for_status()
-        result = resp.json()["data"][0]
+        result = resp.json()
 
-    if "b64_json" in result:
-        return base64.b64decode(result["b64_json"])
+    image_url = result["images"][0]["url"]
+    logger.info("FLUX Kontext 이미지 생성 완료: %s", image_url)
 
+    # 이미지 다운로드
     dl = get_openai_client()
-    img_resp = await dl.get(result["url"])
+    img_resp = await dl.get(image_url)
     img_resp.raise_for_status()
     return img_resp.content
 
 
 class CharacterInfo:
-    """캐릭터 설명 + 음성 설정 + 원본 이미지 + 세계관/스타일"""
+    """캐릭터 설명 + 음성 설정 + 원본 이미지 + 세계관/스타일 + 이름"""
 
     def __init__(
         self,
@@ -377,6 +375,7 @@ class CharacterInfo:
         image_url: str | None = None,
         world_context: str = "",
         art_style: str = "",
+        name: str = "",
     ) -> None:
         self.description = description
         self.voice_id = voice_id
@@ -384,6 +383,7 @@ class CharacterInfo:
         self.image_url = image_url
         self.world_context = world_context
         self.art_style = art_style
+        self.name = name
 
 
 async def get_character_description(
@@ -412,6 +412,7 @@ async def get_character_info(
             image_url=char.imageUrl,
             world_context=getattr(char, "worldContext", "") or "",
             art_style=getattr(char, "artStyle", "") or "",
+            name=char.nameEn or char.name or "",
         )
     if custom_character_id:
         cc = await db.customcharacter.find_unique(where={"id": custom_character_id})
@@ -433,6 +434,7 @@ async def get_character_info(
             image_url=cc.imageUrl1 or cc.imageUrl2 or None,
             world_context="",
             art_style=style_prompt,
+            name=cc.name or "",
         )
     raise ValueError("캐릭터를 선택해주세요")
 
@@ -504,6 +506,7 @@ async def process_storyboard(
     project_id: str | None = None,
     world_context: str = "",
     art_style: str = "",
+    character_name: str = "",
 ) -> None:
     """콘티 생성 전체 파이프라인 (백그라운드)"""
 
@@ -570,18 +573,20 @@ async def process_storyboard(
         await notify(45, "장면 이미지 생성 + 나레이션 동시 시작...")
 
         # 첫 장면 이미지를 먼저 생성 (히어로 프레임 + 참조용)
-        hero_bytes: bytes | None = None
+        hero_url: str | None = None
         if db_scenes:
             first = db_scenes[0]
             try:
-                url, hero_bytes = await generate_scene_image(
+                url, _ = await generate_scene_image(
                     image_prompt=first.imagePrompt,
                     character_desc=character_desc,
                     user_id=user_id,
                     art_style=art_style,
                     world_context=world_context,
                     bgm_mood=bgm_mood,
+                    character_name=character_name,
                 )
+                hero_url = url
                 await db.storyboardscene.update(
                     where={"id": first.id},
                     data={"imageUrl": url, "imageStatus": "COMPLETED"},
@@ -618,10 +623,11 @@ async def process_storyboard(
                     image_prompt=sc.imagePrompt,
                     character_desc=character_desc,
                     user_id=user_id,
-                    reference_image_bytes=hero_bytes,
+                    reference_image_url=hero_url,
                     art_style=art_style,
                     world_context=world_context,
                     bgm_mood=bgm_mood,
+                    character_name=character_name,
                 )
                 await db.storyboardscene.update(
                     where={"id": sc.id},

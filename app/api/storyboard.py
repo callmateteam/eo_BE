@@ -180,6 +180,7 @@ async def create_storyboard(
             project_id=req.project_id,
             world_context=char_info.world_context,
             art_style=char_info.art_style,
+            character_name=char_info.name,
         )
     )
     _background_tasks.add(task)
