@@ -94,15 +94,23 @@ class PikaVideoGenerator(VideoGenerator):
         if not request_id:
             raise RuntimeError(f"Pika 응답에 request_id 없음: {data}")
 
+        # fal.ai 응답에서 제공하는 URL 사용
+        status_url = data.get(
+            "status_url",
+            f"https://queue.fal.run/fal-ai/pika/requests/{request_id}/status",
+        )
+        response_url = data.get(
+            "response_url",
+            f"https://queue.fal.run/fal-ai/pika/requests/{request_id}",
+        )
+
         logger.info("Pika 요청 시작: request_id=%s", request_id)
 
-        video_url = await self._poll_result(request_id)
+        video_url = await self._poll_result(request_id, status_url, response_url)
         return video_url
 
-    async def _poll_result(self, request_id: str) -> str:
+    async def _poll_result(self, request_id: str, status_url: str, result_url: str) -> str:
         """Pika 작업 완료까지 폴링"""
-        status_url = f"https://queue.fal.run/fal-ai/pika/requests/{request_id}/status"
-        result_url = f"https://queue.fal.run/fal-ai/pika/requests/{request_id}"
         headers = {"Authorization": f"Key {self._api_key}"}
 
         elapsed = 0
@@ -198,15 +206,17 @@ class HailuoVideoGenerator(VideoGenerator):
         if not request_id:
             raise RuntimeError(f"Hailuo 응답에 request_id 없음: {data}")
 
+        # fal.ai 응답에서 제공하는 URL 사용 (앱별로 경로가 다를 수 있음)
+        status_url = data.get("status_url", f"{self._result_base}/requests/{request_id}/status")
+        response_url = data.get("response_url", f"{self._result_base}/requests/{request_id}")
+
         logger.info("Hailuo(%s) 요청 시작: request_id=%s", self._model, request_id)
 
-        video_url = await self._poll_result(request_id)
+        video_url = await self._poll_result(request_id, status_url, response_url)
         return video_url
 
-    async def _poll_result(self, request_id: str) -> str:
+    async def _poll_result(self, request_id: str, status_url: str, result_url: str) -> str:
         """Hailuo 작업 완료까지 폴링"""
-        status_url = f"{self._result_base}/requests/{request_id}/status"
-        result_url = f"{self._result_base}/requests/{request_id}"
         headers = {"Authorization": f"Key {self._api_key}"}
 
         elapsed = 0
