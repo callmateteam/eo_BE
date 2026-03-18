@@ -81,18 +81,16 @@ Rules:
 - Total ≤ 60s, each scene 3-10s
 - Output ONLY valid JSON array
 - 3-5 scenes (strictly, never more than 5)
-- imagePrompt: English, max 50 words. Describe a STATIC opening \
-freeze-frame (NOT motion). MUST start with the EXACT character \
-description provided in the user message (copy it verbatim), then add: \
-(1) character POSE/POSITION for this scene, \
+- imagePrompt: English, max 30 words. Describe ONLY the SCENE, \
+NOT the character's appearance. The character description will be \
+added automatically by the system. Focus on: \
+(1) character POSE/POSITION (e.g. sitting, running, holding something), \
 (2) background/location matching world context, (3) key props. \
-The character should be in a natural starting pose. \
+Static opening freeze-frame, NOT mid-action. \
 NO text/letters/words in the image. \
-CRITICAL: NEVER use character names, series names, or franchise names \
-(e.g. do NOT write "Luffy", "Naruto", "Pikachu", "One Piece"). \
-CRITICAL: Every imagePrompt MUST describe the SAME character with \
-IDENTICAL appearance (hair, eyes, outfit, features). Never change \
-hair color, eye color, or clothing between scenes.
+NEVER include character appearance details (hair, eyes, outfit) — \
+those are handled separately. \
+NEVER use character names, series names, or franchise names.
 - motionPrompt: English, max 30 words. Describe ONLY the motion/action \
 that should happen in this scene. Do NOT repeat what's visible in \
 the image. Focus on: movement direction, speed, gestures, expressions.
@@ -116,13 +114,12 @@ epic/funny/calm/tense/sad/upbeat/mysterious
 "narration":"","narrationStyle":"character","bgmMood":"funny"}]"""
 
 STORYBOARD_USER = """\
-Character appearance (use this EXACT description in every imagePrompt): \
-{character_desc}
-World/Setting: {world_context}
-Art style: {art_style}
-Idea: {idea}
-Create short-form storyboard under 60 seconds. Match backgrounds to the world setting.
-REMINDER: Every imagePrompt must begin with the exact character appearance above."""
+캐릭터: {character_desc}
+세계관/배경: {world_context}
+아트 스타일: {art_style}
+아이디어: {idea}
+60초 이내 숏폼 콘티 생성. 배경은 세계관에 맞게 구성.
+NOTE: imagePrompt에 캐릭터 외형을 쓰지 마세요. 장면/포즈/배경만 작성."""
 
 # 이미지 동시 요청 제한 (rate limit 방지) - 지연 초기화
 _IMAGE_SEMAPHORE: asyncio.Semaphore | None = None
@@ -213,7 +210,7 @@ async def generate_scenes_with_gpt(
                 {
                     "title": str(s.get("title", "장면"))[:100],
                     "content": str(s.get("content", ""))[:2000],
-                    "imagePrompt": str(s.get("imagePrompt", ""))[:200],
+                    "imagePrompt": f"{character_desc}. {str(s.get('imagePrompt', ''))}"[:300],
                     "motionPrompt": str(s.get("motionPrompt", ""))[:200],
                     "duration": min(max(float(s.get("duration", 5.0)), 2.0), 10.0),
                     "hasCharacter": bool(s.get("hasCharacter", True)),
@@ -741,7 +738,11 @@ async def content_to_image_prompt(
     content: str,
     character_desc: str,
 ) -> str:
-    """콘티 설명(한글)을 이미지 생성용 영문 프롬프트로 변환"""
+    """콘티 설명(한글)을 이미지 생성용 영문 프롬프트로 변환
+
+    캐릭터 묘사는 GPT에게 맡기지 않고, 장면 묘사만 영문 변환 후
+    코드에서 캐릭터 묘사를 앞에 직접 붙인다 (일관성 보장).
+    """
     client = get_openai_client()
     async with asyncio.timeout(30):
         resp = await client.post(
@@ -758,26 +759,28 @@ async def content_to_image_prompt(
                     {
                         "role": "system",
                         "content": (
-                            "Convert Korean scene description to "
-                            "English image prompt. Max 20 words. "
-                            "Opening shot only. No style/format words. "
-                            "NEVER include text/letters/words. Use symbols or gestures instead."
+                            "Convert Korean scene description to English "
+                            "image prompt. Max 30 words. Describe ONLY the "
+                            "scene action, pose, background, and props. "
+                            "Do NOT describe the character's appearance "
+                            "(hair, eyes, outfit) — that will be added "
+                            "separately. NEVER include text/letters/words."
                         ),
                     },
                     {
                         "role": "user",
-                        "content": (f"캐릭터: {character_desc}\n장면 설명: {content}"),
+                        "content": f"장면 설명: {content}",
                     },
                 ],
             },
         )
         resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
-        # 20단어 초과 시 잘라냄
-        words = raw.split()
-        if len(words) > 20:
-            raw = " ".join(words[:20]).rstrip(",")
-        return raw
+        scene_prompt = resp.json()["choices"][0]["message"]["content"].strip()
+        words = scene_prompt.split()
+        if len(words) > 30:
+            scene_prompt = " ".join(words[:30]).rstrip(",")
+        # 캐릭터 묘사를 앞에 고정 (GPT가 변형 불가)
+        return f"{character_desc}. {scene_prompt}"
 
 
 async def regenerate_scene_image_task(
