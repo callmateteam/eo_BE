@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 
 from app.core.config import settings
@@ -15,6 +16,60 @@ from app.core.s3 import upload_image
 from app.services.tts import generate_scene_narrations
 
 logger = logging.getLogger(__name__)
+
+# ── 저작권 캐릭터/시리즈 이름 제거 (OpenAI moderation 우회) ──
+
+_COPYRIGHT_NAMES: list[str] = [
+    # 캐릭터 이름 (영문/한글)
+    "Monkey D. Luffy", "Monkey D Luffy", "Luffy", "루피",
+    "Uzumaki Naruto", "Naruto", "나루토",
+    "Anya Forger", "Anya", "아냐",
+    "Denji", "덴지",
+    "Itadori Yuji", "Yuji", "유지", "이타도리",
+    "Gojo Satoru", "Gojo", "고죠",
+    "Levi Ackerman", "Levi", "리바이",
+    "Eren Yeager", "Eren", "에렌",
+    "Kamado Tanjiro", "Tanjiro", "탄지로",
+    "Kurosaki Ichigo", "Ichigo", "이치고",
+    "Pikachu", "피카츄",
+    "Kamado Nezuko", "Nezuko", "네즈코",
+    "Totoro", "토토로",
+    "Doraemon", "도라에몽",
+    "Tony Tony Chopper", "Chopper", "쵸파",
+    "Rem", "렘",
+    "Asuna Yuuki", "Asuna", "아스나",
+    "Mikasa Ackerman", "Mikasa", "미카사",
+    "Power", "파워",
+    "Killua Zoldyck", "Killua", "키르아",
+    # 시리즈 이름
+    "One Piece", "원피스", "Naruto Shippuden", "Chainsaw Man", "체인소맨",
+    "Jujutsu Kaisen", "주술회전", "Attack on Titan", "진격의 거인",
+    "Demon Slayer", "귀멸의 칼날", "Bleach", "블리치",
+    "Pokemon", "포켓몬", "My Neighbor Totoro", "이웃집 토토로",
+    "Spy x Family", "스파이 패밀리", "Re:Zero", "리제로",
+    "Sword Art Online", "소드 아트 온라인", "Hunter x Hunter", "헌터x헌터",
+    # 스튜디오 이름 (이미지 프롬프트에서만 제거)
+    "Toei Animation", "MAPPA", "ufotable", "WIT Studio", "Studio Pierrot",
+    "Madhouse", "CloverWorks", "A-1 Pictures", "Studio Ghibli",
+    "White Fox", "Shin-Ei Animation", "OLM",
+]
+
+# 길이 내림차순 정렬 (긴 이름 먼저 매칭: "Monkey D. Luffy" > "Luffy")
+_COPYRIGHT_NAMES.sort(key=len, reverse=True)
+_COPYRIGHT_RE = re.compile(
+    "|".join(re.escape(n) for n in _COPYRIGHT_NAMES),
+    re.IGNORECASE,
+)
+
+
+def _strip_copyright_names(prompt: str) -> str:
+    """이미지 생성 프롬프트에서 저작권 캐릭터/시리즈/스튜디오 이름 제거"""
+    cleaned = _COPYRIGHT_RE.sub("", prompt)
+    # 연속 공백/쉼표 정리
+    cleaned = re.sub(r",\s*,", ",", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip()
+
 
 # ── GPT 콘티 생성 프롬프트 (토큰 최적화) ──
 
@@ -30,7 +85,11 @@ Rules:
 freeze-frame (NOT motion): (1) character POSE/POSITION, \
 (2) background/location matching world context, (3) key props. \
 The character should be in a natural starting pose with room for \
-implied motion. NO text/letters/words in the image.
+implied motion. NO text/letters/words in the image. \
+CRITICAL: NEVER use character names, series names, or franchise names \
+(e.g. do NOT write "Luffy", "Naruto", "Pikachu", "One Piece"). \
+Instead describe ONLY the visual appearance (e.g. "a young man with \
+a straw hat and red vest").
 - motionPrompt: English, max 30 words. Describe ONLY the motion/action \
 that should happen in this scene. Do NOT repeat what's visible in \
 the image. Focus on: movement direction, speed, gestures, expressions.
@@ -217,6 +276,9 @@ async def generate_scene_image(
         "CRITICAL: Do not render any text, letters, or written characters. "
         "Replace any text with symbols or abstract patterns."
     )[:4000]
+
+    # 저작권 캐릭터/시리즈 이름 제거 (OpenAI moderation 차단 방지)
+    full_prompt = _strip_copyright_names(full_prompt)
 
     async with _get_semaphore():
         if reference_image_bytes:
