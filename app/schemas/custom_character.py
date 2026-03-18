@@ -52,6 +52,19 @@ class VoiceId(str, Enum):  # noqa: UP042
     SHIMMER = "shimmer"
 
 
+class CustomCharacterUpdateRequest(BaseModel):
+    """커스텀 캐릭터 수정 요청 (변경할 필드만 전달)"""
+
+    name: str | None = Field(None, min_length=1, max_length=50)
+    description: str | None = Field(None, min_length=1, max_length=500)
+    style: CharacterStyle | None = None
+    voice_id: VoiceId | None = None
+    regenerate: bool = Field(
+        default=False,
+        description="True면 설명/스타일 기반으로 veoPrompt 재생성",
+    )
+
+
 class CustomCharacterCreateResponse(BaseModel):
     """커스텀 캐릭터 생성 응답"""
 

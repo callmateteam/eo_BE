@@ -239,6 +239,108 @@ async def create_custom_character_record(
     return {"id": record.id}
 
 
+async def update_custom_character(
+    character_id: str,
+    user_id: str,
+    update_data: dict,
+    regenerate: bool = False,
+    progress_callback: Callable[[int, str], Awaitable[None]] | None = None,
+) -> dict | None:
+    """커스텀 캐릭터 수정 (설명/스타일/음성 변경, 선택적 프롬프트 재생성)"""
+    record = await db.customcharacter.find_first(
+        where={"id": character_id, "userId": user_id},
+    )
+    if not record:
+        return None
+
+    # 즉시 반영 가능한 필드 업데이트
+    db_data: dict = {}
+    if "name" in update_data:
+        db_data["name"] = update_data["name"]
+    if "description" in update_data:
+        db_data["description"] = update_data["description"]
+    if "style" in update_data:
+        db_data["style"] = update_data["style"]
+    if "voice_id" in update_data:
+        db_data["voiceId"] = update_data["voice_id"]
+
+    if regenerate:
+        db_data["status"] = "PROCESSING"
+        db_data["errorMsg"] = None
+
+    if db_data:
+        await db.customcharacter.update(
+            where={"id": character_id},
+            data=db_data,
+        )
+
+    if regenerate:
+        # 업데이트된 레코드 다시 조회
+        updated = await db.customcharacter.find_unique(where={"id": character_id})
+        if not updated:
+            return None
+        await _regenerate_prompt(updated, progress_callback)
+
+    result = await get_custom_character_by_id(character_id, user_id)
+    return result
+
+
+async def _regenerate_prompt(
+    record: object,
+    progress_callback: Callable[[int, str], Awaitable[None]] | None = None,
+) -> None:
+    """기존 이미지를 사용해 veoPrompt를 재생성"""
+
+    async def notify(pct: int, step: str) -> None:
+        if progress_callback:
+            await progress_callback(pct, step)
+
+    try:
+        await notify(20, "기존 이미지로 AI 분석 중...")
+
+        # S3 이미지 다운로드
+        async with httpx.AsyncClient(timeout=30) as client:
+            r1 = await client.get(record.imageUrl1)
+            r1.raise_for_status()
+            img1 = r1.content
+            ct1 = r1.headers.get("content-type", "image/png")
+
+            r2 = await client.get(record.imageUrl2)
+            r2.raise_for_status()
+            img2 = r2.content
+            ct2 = r2.headers.get("content-type", "image/png")
+
+        await notify(40, "AI 캐릭터 재분석 중...")
+        veo_prompt, voice_style = await analyze_images_with_gpt(
+            img1, img2,
+            record.name, record.description, record.style,
+            ct1, ct2,
+        )
+        await notify(80, "프롬프트 재생성 완료")
+
+        await db.customcharacter.update(
+            where={"id": record.id},
+            data={
+                "veoPrompt": veo_prompt,
+                "voiceStyle": voice_style,
+                "status": "COMPLETED",
+            },
+        )
+        await notify(100, "캐릭터 수정 완료!")
+
+    except Exception as e:
+        logger.exception("커스텀 캐릭터 재생성 실패: %s", record.id)
+        try:
+            await db.customcharacter.update(
+                where={"id": record.id},
+                data={"status": "FAILED", "errorMsg": str(e)[:500]},
+            )
+        except Exception:
+            logger.exception("FAILED 상태 업데이트 실패: %s", record.id)
+        if progress_callback:
+            await progress_callback(-1, "캐릭터 수정에 실패했습니다")
+
+
 async def delete_custom_character(character_id: str, user_id: str) -> None:
     """커스텀 캐릭터 삭제 (소유권 확인 + 스토리보드 연결 확인)"""
     record = await db.customcharacter.find_first(

@@ -30,11 +30,12 @@ async def get_or_create_edit(storyboard_id: str, user_id: str) -> dict | None:
     # 초기 editData 생성 (현재 씬 데이터 기반)
     initial = _build_initial_edit_data(sb)
 
+    edit_data_json = initial.model_dump()
     edit = await db.videoedit.create(
         data={
-            "storyboardId": storyboard_id,
-            "userId": user_id,
-            "editData": initial.model_dump(),
+            "storyboard": {"connect": {"id": storyboard_id}},
+            "user": {"connect": {"id": user_id}},
+            "editData": edit_data_json,
             "version": 1,
         },
     )
@@ -210,20 +211,34 @@ async def finalize_project(storyboard_id: str, user_id: str, title: str) -> dict
 
 
 async def get_video_info(storyboard_id: str, user_id: str) -> dict | None:
-    """완성된 영상 정보 조회"""
+    """영상 정보 조회 (생성 중이면 상태만, 완료 시 URL 포함)"""
     sb = await db.storyboard.find_first(
         where={"id": storyboard_id, "userId": user_id},
-        include={"project": True},
+        include={"project": True, "scenes": True},
     )
-    if not sb or not sb.finalVideoUrl:
+    if not sb:
         return None
 
-    duration = await _get_video_duration(sb.finalVideoUrl)
     project = sb.project
+
+    # 씬별 영상 생성 상태로 전체 상태 판단
+    scenes = sb.scenes or []
+    video_urls = [s.videoUrl for s in scenes if s.videoUrl]
+    if sb.finalVideoUrl:
+        status = "READY"
+    elif video_urls:
+        status = "GENERATING"
+    else:
+        status = "GENERATING"
+
+    duration = 0.0
+    if sb.finalVideoUrl:
+        duration = await _get_video_duration(sb.finalVideoUrl)
 
     return {
         "project_id": project.id if project else "",
         "title": project.title if project else "",
+        "status": status,
         "video_url": sb.finalVideoUrl,
         "thumbnail_url": sb.heroFrameUrl,
         "duration": duration,

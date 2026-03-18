@@ -234,11 +234,12 @@ class FinalizeResponse(BaseModel):
 
 
 class VideoInfoResponse(BaseModel):
-    """완성된 영상 정보 조회 응답"""
+    """영상 정보 조회 응답 (생성 중이면 status만 반환)"""
 
     project_id: str
     title: str
-    video_url: str
+    status: str  # GENERATING, READY, FAILED
+    video_url: str | None = None
     thumbnail_url: str | None = None
-    duration: float
+    duration: float = 0.0
     created_at: str

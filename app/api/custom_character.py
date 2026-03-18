@@ -16,6 +16,7 @@ from app.schemas.custom_character import (
     CustomCharacterCreateResponse,
     CustomCharacterItem,
     CustomCharacterListResponse,
+    CustomCharacterUpdateRequest,
     VoiceId,
 )
 from app.services.custom_character import (
@@ -24,6 +25,7 @@ from app.services.custom_character import (
     get_custom_character_status,
     get_custom_characters,
     process_custom_character,
+    update_custom_character,
 )
 from app.services.custom_character import (
     delete_custom_character as svc_delete_custom_character,
@@ -181,6 +183,99 @@ async def get_custom_character(
     if not char:
         raise HTTPException(status_code=404, detail="캐릭터를 찾을 수 없습니다")
     return CustomCharacterItem(**char)
+
+
+@router.patch(
+    "/{character_id}",
+    response_model=CustomCharacterItem,
+    summary="커스텀 캐릭터 수정",
+    responses={
+        401: {"model": ErrorResponse, "description": "인증 필요"},
+        404: {"model": ErrorResponse, "description": "캐릭터를 찾을 수 없음"},
+    },
+)
+async def update_custom_character_endpoint(
+    character_id: str,
+    req: CustomCharacterUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+) -> CustomCharacterItem:
+    """커스텀 캐릭터 수정 (이름/설명/스타일/음성 변경)
+
+    regenerate=True면 변경된 설명/스타일로 veoPrompt를 재생성합니다.
+    재생성 진행률은 WebSocket(/ws/{character_id})으로 확인 가능합니다.
+    """
+    update_data: dict = {}
+    if req.name is not None:
+        update_data["name"] = req.name
+    if req.description is not None:
+        update_data["description"] = req.description
+    if req.style is not None:
+        update_data["style"] = req.style.value
+    if req.voice_id is not None:
+        update_data["voice_id"] = req.voice_id.value
+
+    if not update_data and not req.regenerate:
+        raise HTTPException(status_code=400, detail="변경할 필드가 없습니다")
+
+    if req.regenerate:
+        # 백그라운드에서 재생성
+        async def progress_callback(pct: int, step: str) -> None:
+            subs = _progress_subs.get(character_id, set())
+            if not subs:
+                return
+            is_terminal = pct >= 100 or pct < 0
+            msg = json.dumps(
+                {
+                    "character_id": character_id,
+                    "progress": max(pct, 0),
+                    "step": step,
+                    "status": (
+                        "FAILED" if pct < 0 else ("COMPLETED" if pct >= 100 else "PROCESSING")
+                    ),
+                },
+                ensure_ascii=False,
+            )
+            dead: list[WebSocket] = []
+            for ws in subs:
+                try:
+                    await ws.send_text(msg)
+                    if is_terminal:
+                        await ws.close()
+                except Exception:
+                    dead.append(ws)
+            if is_terminal:
+                _progress_subs.pop(character_id, None)
+            else:
+                for ws in dead:
+                    subs.discard(ws)
+
+        # 먼저 즉시 필드 업데이트 후 백그라운드 재생성
+        result = await update_custom_character(
+            character_id, current_user["id"], update_data, regenerate=False,
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="캐릭터를 찾을 수 없습니다")
+
+        task = asyncio.create_task(
+            update_custom_character(
+                character_id, current_user["id"], {}, regenerate=True,
+                progress_callback=progress_callback,
+            )
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+        # status를 PROCESSING으로 반환
+        result["status"] = "PROCESSING"
+        return CustomCharacterItem(**result)
+
+    # regenerate=False: 즉시 업데이트만
+    result = await update_custom_character(
+        character_id, current_user["id"], update_data, regenerate=False,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="캐릭터를 찾을 수 없습니다")
+    return CustomCharacterItem(**result)
 
 
 @router.delete(

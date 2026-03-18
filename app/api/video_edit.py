@@ -271,20 +271,20 @@ async def finalize(
 @router.get(
     "/{storyboard_id}/video-info",
     response_model=VideoInfoResponse,
-    summary="완성된 영상 정보 조회 (제목, 시간, URL)",
+    summary="영상 정보 조회 (생성 중 상태 포함)",
     responses={
         401: {"model": ErrorResponse, "description": "인증 필요"},
-        404: {"model": ErrorResponse, "description": "완성된 영상 없음"},
+        404: {"model": ErrorResponse, "description": "스토리보드를 찾을 수 없음"},
     },
 )
 async def video_info(
     storyboard_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> VideoInfoResponse:
-    """완성된 영상의 제목, 길이, URL, 썸네일 조회"""
+    """영상 정보 조회 (생성 중이면 status=GENERATING, 완료 시 URL 포함)"""
     result = await get_video_info(storyboard_id, current_user["id"])
     if not result:
-        raise HTTPException(status_code=404, detail="완성된 영상이 없습니다")
+        raise HTTPException(status_code=404, detail="스토리보드를 찾을 수 없음")
     return VideoInfoResponse(**result)
 
 
