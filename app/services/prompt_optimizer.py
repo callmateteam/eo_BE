@@ -1,12 +1,13 @@
-"""Hailuo I2V 프롬프트 최적화 엔진 v2
+"""Hailuo I2V 프롬프트 최적화 엔진 v3
 
 핵심 원칙 (리서치 기반):
 1. 이미지에 보이는 것은 반복하지 않음 (동작/변화만 명시)
 2. motionPrompt를 우선 사용 (GPT가 생성한 동작 전용 프롬프트)
-3. 80-120 단어 이내, 자연스러운 문장 (목록형 금지)
+3. 80-150 단어 이내, 자연스러운 문장 (목록형 금지)
 4. 자연스러운 관절/동작 키워드 필수 (로봇 동작 방지)
 5. Hailuo [bracket] 카메라 문법 사용
 6. 캐릭터 일관성 키워드 필수 삽입
+7. artStyle은 영문으로 작성 (Hailuo 모델 호환)
 """
 
 from __future__ import annotations
@@ -234,10 +235,10 @@ def build_hailuo_prompt(
     # 자연스러운 문장형 조합 (", " 구분)
     prompt = ", ".join(p for p in parts if p)
 
-    # 120단어 제한
+    # 150단어 제한 (영문 artStyle 반영으로 확장)
     words = prompt.split()
-    if len(words) > 120:
-        prompt = " ".join(words[:120])
+    if len(words) > 150:
+        prompt = " ".join(words[:150])
 
     logger.info(
         "Hailuo 프롬프트 v2: scene=%d, type=%s, words=%d, has_motion=%s",

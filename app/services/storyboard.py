@@ -249,7 +249,7 @@ async def _generate_new(prompt: str) -> bytes:
                 "prompt": prompt,
                 "n": 1,
                 "size": "1024x1536",
-                "quality": "medium",
+                "quality": "high",
             },
         )
         if resp.status_code != 200:
@@ -281,8 +281,8 @@ async def _generate_with_edit(prompt: str, reference_bytes: bytes) -> bytes:
                 "model": "gpt-image-1",
                 "prompt": prompt,
                 "n": "1",
-                "size": "1024x1024",
-                "quality": "medium",
+                "size": "1024x1536",
+                "quality": "high",
             },
             files={
                 "image": ("reference.png", reference_bytes, "image/png"),
