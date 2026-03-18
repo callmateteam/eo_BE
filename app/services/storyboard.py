@@ -81,19 +81,26 @@ Rules:
 - Total ≤ 60s, each scene 3-10s
 - Output ONLY valid JSON array
 - 3-5 scenes (strictly, never more than 5)
-- imagePrompt: English, max 40 words. Describe a STATIC opening \
-freeze-frame (NOT motion): (1) character POSE/POSITION, \
+- imagePrompt: English, max 50 words. Describe a STATIC opening \
+freeze-frame (NOT motion). MUST start with the EXACT character \
+description provided in the user message (copy it verbatim), then add: \
+(1) character POSE/POSITION for this scene, \
 (2) background/location matching world context, (3) key props. \
-The character should be in a natural starting pose with room for \
-implied motion. NO text/letters/words in the image. \
+The character should be in a natural starting pose. \
+NO text/letters/words in the image. \
 CRITICAL: NEVER use character names, series names, or franchise names \
 (e.g. do NOT write "Luffy", "Naruto", "Pikachu", "One Piece"). \
-Instead describe ONLY the visual appearance (e.g. "a young man with \
-a straw hat and red vest").
+CRITICAL: Every imagePrompt MUST describe the SAME character with \
+IDENTICAL appearance (hair, eyes, outfit, features). Never change \
+hair color, eye color, or clothing between scenes.
 - motionPrompt: English, max 30 words. Describe ONLY the motion/action \
 that should happen in this scene. Do NOT repeat what's visible in \
 the image. Focus on: movement direction, speed, gestures, expressions.
-- title/content: Korean, concise
+- title: Korean, short (2-5 words)
+- content: Korean, 2-3 sentences describing the scene in detail. \
+Include: what the character is doing, their expression/emotion, \
+the environment/atmosphere, and any important objects or interactions. \
+Write as if explaining the scene to a viewer.
 - duration: action=short, dialogue=longer
 - hasCharacter: true if the character appears in this scene
 - secondaryCharacter: name of another character (null if none). \
@@ -109,11 +116,13 @@ epic/funny/calm/tense/sad/upbeat/mysterious
 "narration":"","narrationStyle":"character","bgmMood":"funny"}]"""
 
 STORYBOARD_USER = """\
-캐릭터: {character_desc}
-세계관/배경: {world_context}
-아트 스타일: {art_style}
-아이디어: {idea}
-60초 이내 숏폼 콘티 생성. 배경은 세계관에 맞게 구성."""
+Character appearance (use this EXACT description in every imagePrompt): \
+{character_desc}
+World/Setting: {world_context}
+Art style: {art_style}
+Idea: {idea}
+Create short-form storyboard under 60 seconds. Match backgrounds to the world setting.
+REMINDER: Every imagePrompt must begin with the exact character appearance above."""
 
 # 이미지 동시 요청 제한 (rate limit 방지) - 지연 초기화
 _IMAGE_SEMAPHORE: asyncio.Semaphore | None = None
@@ -123,7 +132,7 @@ def _get_semaphore() -> asyncio.Semaphore:
     """이벤트 루프 시작 후 세마포어 지연 생성"""
     global _IMAGE_SEMAPHORE  # noqa: PLW0603
     if _IMAGE_SEMAPHORE is None:
-        _IMAGE_SEMAPHORE = asyncio.Semaphore(3)
+        _IMAGE_SEMAPHORE = asyncio.Semaphore(1)
     return _IMAGE_SEMAPHORE
 
 
@@ -265,16 +274,14 @@ async def generate_scene_image(
     name_text = f"{character_name}. " if character_name else ""
 
     full_prompt = (
-        f"{name_text}"
-        f"{character_desc}. "
-        f"Scene: {image_prompt}. "
+        f"[CHARACTER - must match exactly] {name_text}{character_desc}. "
+        f"[SCENE] {image_prompt}. "
         f"{bg_text}"
-        f"{style_text}. {lighting}. "
-        "The character is in a natural starting pose with room for "
-        "implied motion, NOT mid-action. "
-        "Keep the character's appearance EXACTLY consistent: same face, "
-        "same hair, same outfit, same proportions as described. "
-        "CRITICAL: Do not render any text, letters, or written characters."
+        f"[STYLE] {style_text}. {lighting}. "
+        "The character MUST have the EXACT same appearance in every frame: "
+        "identical face, hair color, hair style, eye color, outfit, and body "
+        "proportions as described in [CHARACTER]. "
+        "Do not render any text, letters, or written characters in the image."
     )[:4000]
 
     async with _get_semaphore():
@@ -296,27 +303,37 @@ async def generate_scene_image(
 async def _generate_with_flux_dev(prompt: str) -> bytes:
     """FLUX dev text-to-image (첫 장면용, 레퍼런스 없음)"""
     client = get_openai_client()
-    async with asyncio.timeout(120):
-        resp = await client.post(
-            "https://fal.run/fal-ai/flux/dev",
-            headers={
-                "Authorization": f"Key {settings.FAL_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "prompt": prompt,
-                "image_size": {"width": 1024, "height": 1536},
-                "num_images": 1,
-                "num_inference_steps": 28,
-                "guidance_scale": 3.5,
-            },
-        )
-        if resp.status_code != 200:
-            logger.error(
-                "FLUX dev 이미지 생성 실패 (%s): %s", resp.status_code, resp.text[:500]
+    max_retries = 3
+    for attempt in range(max_retries):
+        async with asyncio.timeout(120):
+            resp = await client.post(
+                "https://fal.run/fal-ai/flux/dev",
+                headers={
+                    "Authorization": f"Key {settings.FAL_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "prompt": prompt,
+                    "image_size": {"width": 1024, "height": 1536},
+                    "num_images": 1,
+                    "num_inference_steps": 28,
+                    "guidance_scale": 7.0,
+                },
             )
-            resp.raise_for_status()
-        result = resp.json()
+            if resp.status_code == 429:
+                wait = 10 * (attempt + 1)
+                logger.warning("FLUX dev 429 rate limit, %d초 후 재시도 (%d/%d)", wait, attempt + 1, max_retries)
+                await asyncio.sleep(wait)
+                continue
+            if resp.status_code != 200:
+                logger.error(
+                    "FLUX dev 이미지 생성 실패 (%s): %s", resp.status_code, resp.text[:500]
+                )
+                resp.raise_for_status()
+            result = resp.json()
+            break
+    else:
+        raise RuntimeError("FLUX dev 이미지 생성 실패: 최대 재시도 초과 (429)")
 
     image_url = result["images"][0]["url"]
     logger.info("FLUX dev 이미지 생성 완료: %s", image_url)
@@ -331,28 +348,38 @@ async def _generate_with_flux_dev(prompt: str) -> bytes:
 async def _generate_with_flux_kontext(prompt: str, reference_image_url: str) -> bytes:
     """FLUX Kontext image-to-image (나머지 장면용, 히어로 프레임 참조)"""
     client = get_openai_client()
-    async with asyncio.timeout(120):
-        resp = await client.post(
-            "https://fal.run/fal-ai/flux-pro/kontext",
-            headers={
-                "Authorization": f"Key {settings.FAL_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "prompt": prompt,
-                "image_url": reference_image_url,
-                "guidance_scale": 3.5,
-                "num_images": 1,
-                "output_format": "jpeg",
-                "safety_tolerance": "6",
-            },
-        )
-        if resp.status_code != 200:
-            logger.error(
-                "FLUX Kontext 이미지 생성 실패 (%s): %s", resp.status_code, resp.text[:500]
+    max_retries = 3
+    for attempt in range(max_retries):
+        async with asyncio.timeout(120):
+            resp = await client.post(
+                "https://fal.run/fal-ai/flux-pro/kontext",
+                headers={
+                    "Authorization": f"Key {settings.FAL_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "prompt": prompt,
+                    "image_url": reference_image_url,
+                    "guidance_scale": 7.0,
+                    "num_images": 1,
+                    "output_format": "jpeg",
+                    "safety_tolerance": "6",
+                },
             )
-            resp.raise_for_status()
-        result = resp.json()
+            if resp.status_code == 429:
+                wait = 10 * (attempt + 1)
+                logger.warning("FLUX Kontext 429 rate limit, %d초 후 재시도 (%d/%d)", wait, attempt + 1, max_retries)
+                await asyncio.sleep(wait)
+                continue
+            if resp.status_code != 200:
+                logger.error(
+                    "FLUX Kontext 이미지 생성 실패 (%s): %s", resp.status_code, resp.text[:500]
+                )
+                resp.raise_for_status()
+            result = resp.json()
+            break
+    else:
+        raise RuntimeError("FLUX Kontext 이미지 생성 실패: 최대 재시도 초과 (429)")
 
     image_url = result["images"][0]["url"]
     logger.info("FLUX Kontext 이미지 생성 완료: %s", image_url)
