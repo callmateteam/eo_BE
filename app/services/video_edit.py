@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from prisma import Json
+
 from app.core.database import db
 from app.schemas.video_edit import EditData, SceneEditItem
 
@@ -30,12 +32,11 @@ async def get_or_create_edit(storyboard_id: str, user_id: str) -> dict | None:
     # 초기 editData 생성 (현재 씬 데이터 기반)
     initial = _build_initial_edit_data(sb)
 
-    edit_data_json = initial.model_dump()
     edit = await db.videoedit.create(
         data={
             "storyboard": {"connect": {"id": storyboard_id}},
             "user": {"connect": {"id": user_id}},
-            "editData": edit_data_json,
+            "editData": Json(initial.model_dump()),
             "version": 1,
         },
     )
@@ -61,7 +62,7 @@ async def update_edit(storyboard_id: str, user_id: str, edit_data: EditData) -> 
         data={
             "editId": edit.id,
             "version": edit.version,
-            "editData": edit.editData,
+            "editData": Json(edit.editData),
         },
     )
 
@@ -72,7 +73,7 @@ async def update_edit(storyboard_id: str, user_id: str, edit_data: EditData) -> 
     updated = await db.videoedit.update(
         where={"id": edit.id},
         data={
-            "editData": edit_data.model_dump(),
+            "editData": Json(edit_data.model_dump()),
             "version": edit.version + 1,
         },
     )
@@ -103,7 +104,7 @@ async def undo_edit(storyboard_id: str, user_id: str) -> dict | None:
     updated = await db.videoedit.update(
         where={"id": edit.id},
         data={
-            "editData": history.editData,
+            "editData": Json(history.editData),
             "version": history.version,
         },
     )
