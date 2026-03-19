@@ -60,15 +60,22 @@ async def generate_tts(
         S3 URL of the generated audio file
     """
     if voice_id not in VALID_VOICES:
-        voice_id = "alloy"
+        voice_id = "nova"
 
     # narration_style에 따라 instructions 구성
     if narration_style == "narrator":
-        instructions = "Calm, clear Korean narrator voice. Neutral and professional tone."
+        instructions = (
+            "Warm, engaging Korean narrator voice. "
+            "Slightly upbeat and expressive like a popular YouTube storyteller. "
+            "Natural pacing with subtle emotional emphasis."
+        )
     elif voice_style:
         instructions = voice_style
     else:
-        instructions = "Natural Korean speech with appropriate emotion."
+        instructions = (
+            "Expressive Korean speech with natural emotion. "
+            "Lively and engaging tone, like narrating an anime story."
+        )
 
     async with _get_semaphore():
         async with httpx.AsyncClient(timeout=60) as client:

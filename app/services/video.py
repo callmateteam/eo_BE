@@ -234,7 +234,16 @@ class HailuoVideoGenerator(VideoGenerator):
 
                 if status == "COMPLETED":
                     result_resp = await client.get(result_url, headers=headers)
-                    result_resp.raise_for_status()
+                    if result_resp.status_code != 200:
+                        body_text = result_resp.text[:500]
+                        logger.error(
+                            "Hailuo 결과 조회 실패: %d %s",
+                            result_resp.status_code,
+                            body_text,
+                        )
+                        raise RuntimeError(
+                            f"Hailuo 결과 조회 실패 ({result_resp.status_code}): {body_text}"
+                        )
                     result = result_resp.json()
                     video = result.get("video", {})
                     url = video.get("url", "")
@@ -243,7 +252,9 @@ class HailuoVideoGenerator(VideoGenerator):
                     return url
 
                 if status == "FAILED":
-                    raise RuntimeError(f"Hailuo 영상 생성 실패: {status_data}")
+                    error_detail = status_data.get("error", status_data)
+                    logger.error("Hailuo 영상 생성 실패: %s", error_detail)
+                    raise RuntimeError(f"Hailuo 영상 생성 실패: {error_detail}")
 
         raise TimeoutError(f"Hailuo 영상 생성 타임아웃 ({_HAILUO_MAX_WAIT}초)")
 

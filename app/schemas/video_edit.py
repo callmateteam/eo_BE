@@ -46,6 +46,9 @@ class SubtitleAnimation(str, Enum):  # noqa: UP042
     TYPING = "typing"
     POPUP = "popup"
     FADEIN = "fadein"
+    BOUNCE = "bounce"
+    GLOW = "glow"
+    SLIDE_UP = "slide_up"
 
 
 # ── 요청/응답 스키마 ──
@@ -107,14 +110,17 @@ class BackgroundStyle(BaseModel):
 class SubtitleStyle(BaseModel):
     """자막 스타일"""
 
-    font: SubtitleFont = SubtitleFont.NANUM_GOTHIC
-    font_size: int = Field(default=24, ge=12, le=72)
+    font: SubtitleFont = SubtitleFont.PRETENDARD
+    font_size: int = Field(default=36, ge=12, le=72)
     color: str = Field(default="#FFFFFF", description="글자 색상 (hex)")
-    shadow: ShadowStyle = Field(default_factory=ShadowStyle)
-    background: BackgroundStyle = Field(default_factory=BackgroundStyle)
+    bold: bool = Field(default=True, description="볼드체")
+    shadow: ShadowStyle = Field(default_factory=lambda: ShadowStyle(enabled=True, color="#000000", offset=3))
+    background: BackgroundStyle = Field(default_factory=lambda: BackgroundStyle(enabled=False))
+    outline_color: str = Field(default="#000000", description="외곽선 색상")
+    outline_size: int = Field(default=4, ge=0, le=8, description="외곽선 두께")
     position: SubtitlePosition = SubtitlePosition.BOTTOM
     position_y: int | None = Field(default=None, ge=0, le=100, description="자유 배치 Y (0~100%)")
-    animation: SubtitleAnimation = SubtitleAnimation.NONE
+    animation: SubtitleAnimation = SubtitleAnimation.POPUP
     per_char_sizes: list[int] | None = Field(default=None, description="글자별 사이즈 배열")
 
 

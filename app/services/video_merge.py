@@ -173,23 +173,19 @@ async def merge_storyboard_video(
             for vf in video_files:
                 f.write(f"file '{vf}'\n")
 
-        # 4b) 장면별 TTS → 각 장면 시작 시점에 맞춰 합성
-        # 먼저 영상만 concat
+        # 4b) 장면 결합 — crossfade 전환 효과 적용
         concat_video = os.path.join(tmpdir, "concat.mp4")
-        concat_cmd = [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_list,
-            "-c",
-            "copy",
-            concat_video,
-        ]
-        await _run_ffmpeg(concat_cmd)
+        if len(video_files) >= 2:
+            await _concat_with_crossfade(video_files, concat_video, fade_duration=0.4)
+        else:
+            concat_cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_list,
+                "-c", "copy",
+                concat_video,
+            ]
+            await _run_ffmpeg(concat_cmd)
 
         await notify(50, "오디오 믹싱 중...")
 
@@ -234,13 +230,15 @@ async def merge_storyboard_video(
                 (
                     f"subtitles={srt_path}"
                     ":force_style='"
-                    "FontName=NanumGothic,"
-                    "FontSize=12,"
-                    "PrimaryColour=&Hffffff,"
-                    "OutlineColour=&H000000,"
-                    "Outline=2,"
+                    "FontName=Pretendard,"
+                    "FontSize=18,"
+                    "Bold=1,"
+                    "PrimaryColour=&H00FFFFFF,"
+                    "OutlineColour=&H00000000,"
+                    "Outline=4,"
+                    "Shadow=3,"
                     "Alignment=2,"
-                    "MarginV=30'"
+                    "MarginV=80'"
                 ),
                 "-c:a",
                 "copy",
@@ -403,6 +401,60 @@ def _build_bgm_mix_cmd(
         "-shortest",
         output_path,
     ]
+
+
+async def _get_video_duration(path: str) -> float:
+    """ffprobe로 영상 길이 조회"""
+    cmd = [
+        "ffprobe", "-v", "quiet",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        path,
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, _ = await proc.communicate()
+    try:
+        return float(stdout.decode().strip())
+    except ValueError:
+        return 5.0
+
+
+async def _concat_with_crossfade(
+    files: list[str], output_path: str, fade_duration: float = 0.4
+) -> None:
+    """crossfade 전환 효과로 영상 결합 (dissolve)"""
+    if len(files) < 2:
+        return
+
+    current = files[0]
+    for i in range(1, len(files)):
+        is_last = i == len(files) - 1
+        out = output_path if is_last else output_path.replace(".mp4", f"_xf{i}.mp4")
+
+        duration = await _get_video_duration(current)
+        offset = max(0, duration - fade_duration)
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", current,
+            "-i", files[i],
+            "-filter_complex",
+            (
+                f"[0:v][1:v]xfade=transition=dissolve"
+                f":duration={fade_duration}:offset={offset}[v]"
+            ),
+            "-map", "[v]",
+            "-an",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            out,
+        ]
+        await _run_ffmpeg(cmd)
+        current = out
+
+    logger.info("Crossfade 결합 완료: %d 장면", len(files))
 
 
 async def _run_ffmpeg(cmd: list[str]) -> None:

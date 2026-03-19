@@ -20,33 +20,33 @@ logger = logging.getLogger(__name__)
 
 MOTION_ENHANCERS: dict[str, str] = {
     "cooking": (
-        "smooth rhythmic chopping motion, natural arm swing, "
-        "elbow bending fluidly, wrist rotating naturally, "
-        "body slightly swaying with each chop"
+        "subtle rhythmic arm motion, gentle wrist movement, "
+        "minimal body sway, character face and body unchanged"
     ),
     "eating": (
-        "natural chewing motion, smooth hand-to-mouth movement, "
-        "gentle head nodding, relaxed body posture"
+        "subtle hand-to-mouth movement, gentle head nod, "
+        "relaxed posture, character appearance preserved"
     ),
     "walking": (
-        "natural walking gait with weight shift, "
-        "arms swinging naturally, smooth stride, "
-        "body momentum flowing forward"
+        "gentle walking motion with subtle weight shift, "
+        "minimal arm swing, character design preserved"
     ),
     "action": (
-        "dynamic fluid motion with natural momentum, "
-        "smooth weight transfer between poses, "
-        "organic follow-through on each movement"
+        "controlled fluid motion, subtle weight transfer, "
+        "character proportions maintained throughout"
     ),
     "sitting": (
-        "gentle breathing motion, subtle body sway, natural hand gestures, relaxed organic posture"
+        "gentle breathing motion, subtle body sway, "
+        "relaxed posture, character appearance unchanged"
     ),
     "talking": (
-        "natural lip movement, subtle head tilts, "
-        "gentle hand gestures while speaking, "
-        "lifelike body language"
+        "subtle lip movement, gentle head tilt, "
+        "minimal hand gestures, character face preserved"
     ),
-    "default": ("fluid natural motion, smooth weight shift, organic movement, lifelike animation"),
+    "default": (
+        "subtle natural motion, gentle movement, "
+        "character appearance preserved throughout"
+    ),
 }
 
 # ── 동작 키워드 → 장면 유형 매핑 ──
@@ -223,12 +223,16 @@ def build_hailuo_prompt(
     if art_style:
         parts.append(art_style)
 
-    # 8. 캐릭터 일관성 키워드 (핵심)
+    # 8. 캐릭터 일관성 키워드 (핵심 — 보존 최우선)
     consistency = (
         "consistent character appearance throughout, "
-        "same face and proportions, "
-        "smooth natural animation, no morphing, no distortion, "
-        "no text overlay"
+        "same face shape and proportions in every frame, "
+        "identical hair style and color, "
+        "preserve original character design exactly, "
+        "smooth natural animation, "
+        "no morphing, no distortion, no deformation, "
+        "no extra fingers, no missing limbs, "
+        "no text overlay, no watermark"
     )
     parts.append(consistency)
 
@@ -261,7 +265,8 @@ build_pika_prompt = build_hailuo_prompt
 def build_pika_negative_prompt() -> str:
     """Pika v2.2 negative prompt (P19 수정)"""
     return (
-        "blurry, low resolution, distorted, extra fingers, "
-        "bad anatomy, morphing, shaky camera, text, letters, "
-        "words, watermark, signature"
+        "blurry, low resolution, distorted, extra fingers, missing fingers, "
+        "bad anatomy, morphing, deformation, face change, proportion change, "
+        "shaky camera, text, letters, words, watermark, signature, "
+        "3d render, realistic, photorealistic"
     )

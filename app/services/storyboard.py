@@ -101,8 +101,20 @@ the environment/atmosphere, and any important objects or interactions. \
 Write as if explaining the scene to a viewer.
 - duration: action=short, dialogue=longer
 - hasCharacter: true if the character appears in this scene
-- secondaryCharacter: name of another character (null if none). \
-Only if the idea mentions another character by name.
+- secondaryCharacter: Korean name of another character mentioned in \
+the idea (null if none). If the idea mentions ANY other character \
+besides the main one, you MUST fill this field. \
+Example: if idea says "피카츄와 파이리가 싸운다", secondaryCharacter="파이리".
+- secondaryCharacterDesc: English visual description of the secondary \
+character. REQUIRED if secondaryCharacter is not null. \
+Describe their APPEARANCE in detail based on your knowledge: \
+body shape, color, size, distinctive features. \
+NEVER use the character's name — describe ONLY how they look. \
+Example: for 파이리 → "small orange bipedal lizard with a flame \
+burning at the tip of its tail, blue eyes, cream-colored belly". \
+For 리자몽 → "large orange dragon with wings, flame on tail tip". \
+Also include this secondary character in imagePrompt scenes \
+where they appear.
 - narration: Korean TTS text. null if silent
 - narrationStyle: "character"|"narrator"|"none"
 - bgmMood: overall BGM mood (first scene only): \
@@ -111,6 +123,7 @@ epic/funny/calm/tense/sad/upbeat/mysterious
 
 [{"title":"","content":"","imagePrompt":"","motionPrompt":"",\
 "duration":5.0,"hasCharacter":true,"secondaryCharacter":null,\
+"secondaryCharacterDesc":null,\
 "narration":"","narrationStyle":"character","bgmMood":"funny"}]"""
 
 STORYBOARD_USER = """\
@@ -140,94 +153,125 @@ async def generate_scenes_with_gpt(
     world_context: str = "",
     art_style: str = "",
 ) -> tuple[list[dict], str | None]:
-    """GPT-4o-mini로 콘티 장면 분할 생성 (토큰 절약)"""
+    """GPT-4o-mini로 콘티 장면 분할 생성 (최대 3회 재시도)"""
     client = get_openai_client()
-    async with asyncio.timeout(60):
-        resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "gpt-4o-mini",
-                "max_tokens": 2000,
-                "temperature": 0.7,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": STORYBOARD_SYSTEM},
-                    {
-                        "role": "user",
-                        "content": STORYBOARD_USER.format(
-                            character_desc=character_desc,
-                            idea=idea,
-                            world_context=world_context or "일반적인 배경",
-                            art_style=art_style or "anime style",
-                        ),
+    max_retries = 3
+    last_error: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with asyncio.timeout(60):
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                        "Content-Type": "application/json",
                     },
-                ],
-            },
-        )
-        resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
-        parsed = json.loads(raw)
+                    json={
+                        "model": "gpt-4o-mini",
+                        "max_tokens": 2000,
+                        "temperature": 0.7 + (attempt - 1) * 0.1,
+                        "response_format": {"type": "json_object"},
+                        "messages": [
+                            {"role": "system", "content": STORYBOARD_SYSTEM},
+                            {
+                                "role": "user",
+                                "content": STORYBOARD_USER.format(
+                                    character_desc=character_desc,
+                                    idea=idea,
+                                    world_context=world_context or "일반적인 배경",
+                                    art_style=art_style or "anime style",
+                                ),
+                            },
+                        ],
+                    },
+                )
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"].strip()
+                logger.debug("GPT 콘티 응답 (시도 %d): %s", attempt, raw[:300])
+                parsed = json.loads(raw)
 
-        # response_format=json_object는 객체를 반환하므로 배열 추출
-        if isinstance(parsed, list):
-            scenes = parsed
-        else:
-            # GPT가 사용할 수 있는 다양한 키 처리
-            for key in ("scenes", "data", "storyboard", "cuts"):
-                if key in parsed and isinstance(parsed[key], list):
-                    scenes = parsed[key]
-                    break
-            else:
-                scenes = []
+                # response_format=json_object는 객체를 반환하므로 배열 추출
+                if isinstance(parsed, list):
+                    scenes = parsed
+                else:
+                    for key in ("scenes", "data", "storyboard", "cuts"):
+                        if key in parsed and isinstance(parsed[key], list):
+                            scenes = parsed[key]
+                            break
+                    else:
+                        scenes = []
 
-        if not scenes:
-            raise ValueError("GPT가 유효한 장면을 생성하지 못했습니다")
+                if not scenes:
+                    logger.warning(
+                        "GPT 콘티 파싱 실패 (시도 %d/%d): keys=%s",
+                        attempt, max_retries, list(parsed.keys()) if isinstance(parsed, dict) else type(parsed),
+                    )
+                    last_error = ValueError("GPT가 유효한 장면을 생성하지 못했습니다")
+                    continue
 
-        # bgmMood 추출 (첫 장면에서)
-        bgm_mood = None
-        for s in scenes:
-            if s.get("bgmMood"):
-                bgm_mood = str(s["bgmMood"])[:50]
+                # 성공
                 break
 
-        # 필드 검증 및 정규화
-        validated: list[dict] = []
-        for s in scenes:
-            narration_raw = s.get("narration")
-            narration = str(narration_raw)[:1000] if narration_raw else None
-            narration_style = str(s.get("narrationStyle", "none"))
-            if narration_style not in ("character", "narrator", "none"):
-                narration_style = "none"
-            # narration이 없으면 style도 none으로 통일
-            if not narration:
-                narration_style = "none"
+        except Exception as exc:
+            logger.warning("GPT 콘티 생성 에러 (시도 %d/%d): %s", attempt, max_retries, exc)
+            last_error = exc
+            if attempt < max_retries:
+                await asyncio.sleep(2)
+            continue
+    else:
+        raise last_error or ValueError("GPT 콘티 생성 실패 (재시도 소진)")
 
-            validated.append(
-                {
-                    "title": str(s.get("title", "장면"))[:100],
-                    "content": str(s.get("content", ""))[:2000],
-                    "imagePrompt": f"{character_desc}. {str(s.get('imagePrompt', ''))}"[:300],
-                    "motionPrompt": str(s.get("motionPrompt", ""))[:200],
-                    "duration": min(max(float(s.get("duration", 5.0)), 2.0), 10.0),
-                    "hasCharacter": bool(s.get("hasCharacter", True)),
-                    "secondaryCharacter": str(s.get("secondaryCharacter") or "")[:100] or None,
-                    "narration": narration,
-                    "narrationStyle": narration_style,
-                }
-            )
+    # bgmMood 추출 (첫 장면에서)
+    bgm_mood = None
+    for s in scenes:
+        if s.get("bgmMood"):
+            bgm_mood = str(s["bgmMood"])[:50]
+            break
 
-        # 총 duration 60초 초과 시 비례 조정
-        total = sum(s["duration"] for s in validated)
-        if total > 60:
-            ratio = 60.0 / total
-            for s in validated:
-                s["duration"] = round(s["duration"] * ratio, 1)
+    # 필드 검증 및 정규화
+    validated: list[dict] = []
+    for s in scenes:
+        narration_raw = s.get("narration")
+        narration = str(narration_raw)[:1000] if narration_raw else None
+        narration_style = str(s.get("narrationStyle", "none"))
+        if narration_style not in ("character", "narrator", "none"):
+            narration_style = "none"
+        # narration이 없으면 style도 none으로 통일
+        if not narration:
+            narration_style = "none"
 
-        return validated, bgm_mood
+        # 보조 캐릭터 외형 묘사 추출
+        sec_desc = str(s.get("secondaryCharacterDesc") or "")[:300]
+        # imagePrompt에 보조 캐릭터 묘사 포함
+        scene_prompt = str(s.get("imagePrompt", ""))
+        if sec_desc:
+            img_prompt = f"{character_desc}. {scene_prompt}. Also in the scene: {sec_desc}"
+        else:
+            img_prompt = f"{character_desc}. {scene_prompt}"
+
+        validated.append(
+            {
+                "title": str(s.get("title", "장면"))[:100],
+                "content": str(s.get("content", ""))[:2000],
+                "imagePrompt": img_prompt[:500],
+                "motionPrompt": str(s.get("motionPrompt", ""))[:200],
+                "duration": min(max(float(s.get("duration", 5.0)), 2.0), 10.0),
+                "hasCharacter": bool(s.get("hasCharacter", True)),
+                "secondaryCharacter": str(s.get("secondaryCharacter") or "")[:100] or None,
+                "narration": narration,
+                "narrationStyle": narration_style,
+            }
+        )
+
+    # 총 duration 60초 초과 시 비례 조정
+    total = sum(s["duration"] for s in validated)
+    if total > 60:
+        ratio = 60.0 / total
+        for s in validated:
+            s["duration"] = round(s["duration"] * ratio, 1)
+
+    return validated, bgm_mood
 
 
 async def generate_scene_image(
@@ -357,9 +401,11 @@ async def _generate_with_flux_kontext(prompt: str, reference_image_url: str) -> 
                 json={
                     "prompt": prompt,
                     "image_url": reference_image_url,
+                    "aspect_ratio": "9:16",
+                    "num_inference_steps": 28,
                     "guidance_scale": 7.0,
                     "num_images": 1,
-                    "output_format": "jpeg",
+                    "output_format": "png",
                     "safety_tolerance": "6",
                 },
             )
@@ -597,6 +643,7 @@ async def process_storyboard(
         await notify(45, "장면 이미지 생성 + 나레이션 동시 시작...")
 
         # 첫 장면 이미지를 먼저 생성 (히어로 프레임 + 참조용)
+        # 캐릭터 원본 이미지가 있으면 레퍼런스로 사용 → 캐릭터 일관성 보장
         hero_url: str | None = None
         if db_scenes:
             first = db_scenes[0]
@@ -605,6 +652,7 @@ async def process_storyboard(
                     image_prompt=first.imagePrompt,
                     character_desc=character_desc,
                     user_id=user_id,
+                    reference_image_url=character_image_url,
                     art_style=art_style,
                     world_context=world_context,
                     bgm_mood=bgm_mood,

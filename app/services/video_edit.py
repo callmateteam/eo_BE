@@ -29,8 +29,8 @@ async def get_or_create_edit(storyboard_id: str, user_id: str) -> dict | None:
     if edit:
         return _to_dict(edit)
 
-    # 초기 editData 생성 (현재 씬 데이터 기반)
-    initial = _build_initial_edit_data(sb)
+    # 초기 editData 생성 (현재 씬 데이터 기반 + GPT 자막 스타일 추천)
+    initial = await _build_initial_edit_data(sb)
 
     edit = await db.videoedit.create(
         data={
@@ -115,8 +115,14 @@ async def undo_edit(storyboard_id: str, user_id: str) -> dict | None:
     return _to_dict(updated)
 
 
-def _build_initial_edit_data(storyboard) -> EditData:
-    """스토리보드의 현재 씬 데이터를 기반으로 초기 편집 상태 생성"""
+async def _build_initial_edit_data(storyboard) -> EditData:
+    """스토리보드의 현재 씬 데이터를 기반으로 초기 편집 상태 생성
+
+    GPT가 씬 내용/분위기를 분석하여 자막 스타일을 자동 추천한다.
+    """
+    from app.schemas.video_edit import SubtitleItem
+    from app.services.subtitle_recommender import recommend_subtitle_styles
+
     scenes = sorted(storyboard.scenes or [], key=lambda s: s.sceneOrder)
 
     scene_edits = [
@@ -130,21 +136,42 @@ def _build_initial_edit_data(storyboard) -> EditData:
         for s in scenes
     ]
 
-    # 기존 나레이션을 자막으로 변환
+    # GPT 자막 스타일 추천
+    scene_dicts = [
+        {
+            "content": s.content or "",
+            "narration": s.narration,
+            "narrationStyle": s.narrationStyle or "none",
+            "duration": s.duration,
+        }
+        for s in scenes
+    ]
+
+    try:
+        styles = await recommend_subtitle_styles(
+            scene_dicts,
+            bgm_mood=storyboard.bgmMood,
+            character_name=getattr(storyboard, "title", ""),
+        )
+    except Exception:
+        logger.warning("자막 스타일 추천 실패, 기본값 사용")
+        styles = [None] * len(scenes)
+
+    # 나레이션을 GPT 추천 스타일 자막으로 변환
     subtitles = []
     elapsed = 0.0
-    for s in scenes:
+    for i, s in enumerate(scenes):
         if s.narration and s.narrationStyle != "none":
-            from app.schemas.video_edit import SubtitleItem
-
-            subtitles.append(
-                SubtitleItem(
-                    scene_id=s.id,
-                    text=s.narration,
-                    start=elapsed,
-                    end=elapsed + s.duration,
-                )
-            )
+            style = styles[i] if i < len(styles) and styles[i] else None
+            item_kwargs = {
+                "scene_id": s.id,
+                "text": s.narration,
+                "start": elapsed,
+                "end": elapsed + s.duration,
+            }
+            if style:
+                item_kwargs["style"] = style
+            subtitles.append(SubtitleItem(**item_kwargs))
         elapsed += s.duration
 
     return EditData(

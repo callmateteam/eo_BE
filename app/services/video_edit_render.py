@@ -515,8 +515,10 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
 
         # 색상 변환 (hex → ASS &HBBGGRR)
         primary = _hex_to_ass_color(s.color)
-        outline = _hex_to_ass_color(s.shadow.color) if s.shadow.enabled else "&H00000000"
+        outline_color = _hex_to_ass_color(getattr(s, 'outline_color', '#000000'))
+        outline_size = getattr(s, 'outline_size', 4)
         shadow_depth = s.shadow.offset if s.shadow.enabled else 0
+        is_bold = 1 if getattr(s, 'bold', True) else 0
 
         # 배경
         if s.background.enabled:
@@ -530,8 +532,8 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
         # 위치 → alignment
         alignment = _position_to_alignment(s.position)
 
-        # margin
-        margin_v = 60
+        # margin (bottom 기준 — 높을수록 위로 올라감)
+        margin_v = 180
         if s.position_y is not None:
             margin_v = int(1920 * (100 - s.position_y) / 100)
 
@@ -539,8 +541,8 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
 
         styles.append(
             f"Style: {style_name},{s.font.value},{font_size},"
-            f"{primary},&H000000FF,{outline},{back_color},"
-            f"0,0,0,0,100,100,0,0,{border_style},2,{shadow_depth},{alignment},"
+            f"{primary},&H000000FF,{outline_color},{back_color},"
+            f"{is_bold},0,0,0,100,100,0,0,{border_style},{outline_size},{shadow_depth},{alignment},"
             f"20,20,{margin_v},1"
         )
 
@@ -596,12 +598,31 @@ def _seconds_to_ass_ts(seconds: float) -> str:
 def _get_animation_tag(animation: SubtitleAnimation, duration: float) -> str:
     """애니메이션 → ASS override 태그"""
     if animation == SubtitleAnimation.FADEIN:
-        return "{\\fad(500,0)}"
+        return "{\\fad(400,200)}"
     if animation == SubtitleAnimation.POPUP:
-        return "{\\fscx0\\fscy0\\t(0,200,\\fscx100\\fscy100)}"
+        # 팝업: 0에서 130%로 커졌다가 100%로 바운스 (트렌디 숏폼 스타일)
+        return "{\\fscx0\\fscy0\\t(0,150,\\fscx130\\fscy130)\\t(150,250,\\fscx100\\fscy100)}"
+    if animation == SubtitleAnimation.BOUNCE:
+        # 바운스: 위에서 떨어지면서 탄성 효과
+        return (
+            "{\\move(540,800,540,960,0,200)"
+            "\\fscx0\\fscy0"
+            "\\t(0,120,\\fscx115\\fscy115)"
+            "\\t(120,200,\\fscx100\\fscy100)}"
+        )
+    if animation == SubtitleAnimation.GLOW:
+        # 글로우: 페이드인 + 테두리 빛남 효과
+        return (
+            "{\\fad(300,200)"
+            "\\blur6\\t(0,400,\\blur0)"
+            "\\bord8\\t(0,400,\\bord4)}"
+        )
+    if animation == SubtitleAnimation.SLIDE_UP:
+        # 아래에서 위로 슬라이드
+        return "{\\move(540,1000,540,960,0,250)\\fad(250,150)}"
     if animation == SubtitleAnimation.TYPING:
-        # 글자 하나씩 나타나는 효과 (카라오케)
-        ms_per_char = int(duration * 1000 / 20)  # 대략 배분
+        # 글자 하나씩 나타나는 효과 (카라오케 스윕)
+        ms_per_char = int(duration * 1000 / 20)
         return f"{{\\k{ms_per_char}}}"
     return ""
 
