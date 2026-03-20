@@ -295,7 +295,7 @@ async def generate_scene_image(
     """
 
     # 스타일
-    style_text = art_style or "Japanese anime style, clean digital cel animation look"
+    style_text = art_style or "2D anime cel-shaded style, flat colors, bold outlines, vibrant palette"
 
     # 조명
     mood_lighting = {
@@ -316,16 +316,24 @@ async def generate_scene_image(
     # 캐릭터 이름을 프롬프트에 포함 (FLUX는 저작권 필터 없음)
     name_text = f"{character_name}. " if character_name else ""
 
-    full_prompt = (
-        f"[CHARACTER - must match exactly] {name_text}{character_desc}. "
-        f"[SCENE] {image_prompt}. "
-        f"{bg_text}"
-        f"[STYLE] {style_text}. {lighting}. "
-        "The character MUST have the EXACT same appearance in every frame: "
-        "identical face, hair color, hair style, eye color, outfit, and body "
-        "proportions as described in [CHARACTER]. "
-        "Do not render any text, letters, or written characters in the image."
-    )[:4000]
+    if reference_image_url:
+        # Kontext: 레퍼런스 이미지가 캐릭터를 정의 → 프롬프트는 씬/배경/포즈만
+        full_prompt = (
+            f"Same character from reference image in new scene. "
+            f"{image_prompt}. "
+            f"{bg_text}"
+            f"{style_text}. {lighting}. "
+            "No text or letters in the image."
+        )[:2000]
+    else:
+        # FLUX dev: 텍스트만으로 캐릭터 생성 → 상세 묘사 필요
+        full_prompt = (
+            f"{name_text}{character_desc}. "
+            f"{image_prompt}. "
+            f"{bg_text}"
+            f"{style_text}. {lighting}. "
+            "No text or letters in the image."
+        )[:4000]
 
     async with _get_semaphore():
         if reference_image_url:
@@ -405,7 +413,7 @@ async def _generate_with_flux_kontext(prompt: str, reference_image_url: str) -> 
                     "image_url": reference_image_url,
                     "aspect_ratio": "9:16",
                     "num_inference_steps": 28,
-                    "guidance_scale": 7.0,
+                    "guidance_scale": 4.0,
                     "num_images": 1,
                     "output_format": "png",
                     "safety_tolerance": "6",
