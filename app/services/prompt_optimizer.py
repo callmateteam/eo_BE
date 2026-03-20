@@ -186,27 +186,7 @@ def build_hailuo_prompt(
 
     parts: list[str] = []
 
-    # 1. 배경/세계관 (첫 문장에 — 흰 배경 방지)
-    if world_context:
-        bg = world_context.strip()
-        parts.append(f"In {bg}")
-
-    # 2. 동작 (motionPrompt 우선 — 이미지 내용 반복 금지)
-    if motion_prompt:
-        # GPT가 생성한 동작 전용 프롬프트 사용
-        parts.append(motion_prompt)
-    elif scene_content:
-        # motionPrompt 없으면 scene_content에서 동작만 추출
-        parts.append(scene_content)
-
-    # 3. 보조 캐릭터
-    if secondary_character and secondary_character_desc:
-        parts.append(f"Together with {secondary_character}: {secondary_character_desc}")
-
-    # 4. 자연스러운 동작 보강 (로봇 동작 방지 핵심)
-    parts.append(motion_enhancer)
-
-    # 5. 카메라 (Hailuo [bracket] 문법)
+    # 1. 카메라 (Hailuo [bracket] 문법 — 반드시 맨 앞)
     if scene_order == 1:
         camera = _CAMERA_BY_POSITION["first"]
     elif scene_order == total_scenes:
@@ -215,34 +195,30 @@ def build_hailuo_prompt(
         camera = _CAMERA_BY_POSITION["middle"]
     parts.append(camera)
 
-    # 6. 조명
-    lighting = _MOOD_LIGHTING.get(bgm_mood or "", "natural lighting")
-    parts.append(lighting)
-
-    # 7. 아트 스타일 (캐릭터 데이터 기반)
-    if art_style:
-        parts.append(art_style)
-
-    # 8. 캐릭터 일관성 키워드 (핵심 — 보존 최우선)
-    consistency = (
-        "consistent character appearance throughout, "
-        "same face shape and proportions in every frame, "
-        "identical hair style and color, "
-        "preserve original character design exactly, "
-        "smooth natural animation, "
-        "no morphing, no distortion, no deformation, "
-        "no extra fingers, no missing limbs, "
-        "no text overlay, no watermark"
+    # 2. 캐릭터 보존 (1문장으로 간결하게)
+    parts.append(
+        "Preserve exact character colors and design from reference image."
     )
-    parts.append(consistency)
 
-    # 자연스러운 문장형 조합 (", " 구분)
-    prompt = ", ".join(p for p in parts if p)
+    # 3. 동작 (영어만 — motionPrompt 우선, imagePrompt fallback)
+    if motion_prompt:
+        parts.append(motion_prompt)
+    elif image_prompt:
+        parts.append(image_prompt)
 
-    # 150단어 제한 (영문 artStyle 반영으로 확장)
+    # 4. 동작 보강 (자연스러운 움직임 — 간결)
+    parts.append(motion_enhancer)
+
+    # 5. 품질 앵커 (짧게)
+    parts.append("Smooth animation, consistent character appearance.")
+
+    # 자연스러운 문장형 조합
+    prompt = " ".join(p for p in parts if p)
+
+    # 90단어 제한 (짧을수록 캐릭터 보존 우수)
     words = prompt.split()
-    if len(words) > 150:
-        prompt = " ".join(words[:150])
+    if len(words) > 90:
+        prompt = " ".join(words[:90])
 
     logger.info(
         "Hailuo 프롬프트 v2: scene=%d, type=%s, words=%d, has_motion=%s",
