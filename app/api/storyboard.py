@@ -160,10 +160,16 @@ async def create_storyboard(
     record_id: str = result["id"]
 
     # 프로젝트에 스토리보드 즉시 연결 (실패해도 관계 유지)
+    enriched_idea: dict | None = None
     if req.project_id:
+        from app.core.database import db as _db
         from app.services.project import link_storyboard
 
         await link_storyboard(req.project_id, record_id)
+        # 프로젝트의 enrichedIdea를 조회하여 콘티 생성에 활용
+        proj = await _db.project.find_unique(where={"id": req.project_id})
+        if proj and getattr(proj, "enrichedIdea", None):
+            enriched_idea = proj.enrichedIdea
 
     # 백그라운드 태스크 시작
     cb = _make_progress_callback(record_id)
@@ -181,6 +187,7 @@ async def create_storyboard(
             world_context=char_info.world_context,
             art_style=char_info.art_style,
             character_name=char_info.name,
+            enriched_idea=enriched_idea,
         )
     )
     _background_tasks.add(task)

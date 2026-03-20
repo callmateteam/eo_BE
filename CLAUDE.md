@@ -172,8 +172,9 @@ be/
 |------|------|------|------------|
 | 1 | CHARACTER_SELECT | 캐릭터 생성 또는 선택 | character_id 또는 custom_character_id |
 | 2 | IDEA_INPUT | 아이디어 입력 | idea 텍스트 |
-| 3 | STORYBOARD | 스토리보드(콘티) 생성/수정 | storyboard_id + scenes 데이터 |
-| 4 | VIDEO_GENERATION | 영상 생성 및 편집 | 각 씬 videoUrl, finalVideoUrl |
+| 3 | IDEA_ENRICHMENT | 아이디어 구체화 (GPT → 사용자 수정) | enrichedIdea (JSON: background, mood, main_character, supporting_characters, story) |
+| 4 | STORYBOARD | 스토리보드(콘티) 생성/수정 | storyboard_id + scenes 데이터 |
+| 5 | VIDEO_GENERATION | 영상 생성 및 편집 | 각 씬 videoUrl, finalVideoUrl |
 
 **DB 변경 (prisma/schema.prisma):**
 ```
@@ -474,6 +475,98 @@ model VideoEditHistory {
 - `PATCH /edit` 호출 시마다 현재 editData를 VideoEditHistory에 저장 + version++
 - `POST /edit/undo` 호출 시 version-1의 히스토리에서 editData 복원
 - 최대 50단계 히스토리 유지 (초과 시 가장 오래된 것 삭제)
+
+---
+
+---
+
+### 알려진 이슈: 영상이 콘티(이미지)와 불일치하는 문제
+
+> **심각도**: HIGH — 이미지 콘티는 만족스럽게 나오지만, 영상(Hailuo I2V)이 콘티와 크게 다름
+> **상태**: 원인 분석 완료, 수정 필요
+
+#### 증상
+- 콘티 이미지: 카페 실내, 피카츄가 테이블에 앉아 메뉴 보는 장면 → **정확히 나옴**
+- 생성된 영상: 캐릭터 변형, 배경 불일치, 콘티와 다른 동작
+
+#### 원인 분석 (Hailuo 프롬프트 vs 이미지 프롬프트 비교)
+
+**1. 장면 컨텍스트 누락 — Hailuo 프롬프트에 배경/장소 정보가 없음**
+```
+[이미지 프롬프트] A cozy cafe interior with warm lighting, sitting at a table with a menu.
+[Hailuo 프롬프트] [Truck right] Wide establishing shot Scene set in 포켓몬 세계관.
+                  Character shifts gaze between menu and window, ears twitching.
+```
+- 이미지 프롬프트: "cozy cafe interior, warm lighting" 명시
+- Hailuo 프롬프트: "포켓몬 세계관"만 있고 **카페/실내/조명 정보 없음**
+- `build_hailuo_prompt`가 `motionPrompt`만 사용하고 `imagePrompt`(장면 묘사)를 무시함
+
+**2. world_context가 한글 — Hailuo 모델은 영어 프롬프트 최적화**
+```
+Scene set in 포켓몬 세계관  ← 한글, Hailuo가 해석 못함
+```
+- `world_context`가 DB에 한글로 저장됨 → 영어로 변환 필요
+
+**3. enrichedIdea 미활용 — 배경/분위기 데이터가 영상 프롬프트에 반영 안 됨**
+- 3단계에서 구체화한 배경("카페 내부, 따뜻한 조명, 비 오는 창밖")이 영상 프롬프트에 안 들어감
+- `prompt_optimizer.py`가 `enrichedIdea`를 전혀 모름
+
+**4. imagePrompt 완전 무시 — motionPrompt만 사용**
+```python
+# prompt_optimizer.py L203-206
+if motion_prompt:
+    parts.append(motion_prompt)      # motionPrompt만 사용
+elif image_prompt:
+    parts.append(image_prompt)       # motionPrompt 없을 때만 fallback
+```
+- motionPrompt는 동작만 설명 ("Character shifts gaze...")
+- imagePrompt는 장면 전체 설명 ("cozy cafe interior...")
+- **motionPrompt가 있으면 imagePrompt를 완전히 버림** → 장면 컨텍스트 소실
+
+#### 해결 방향
+1. `build_hailuo_prompt`에서 `motionPrompt`와 `imagePrompt`를 **모두** 사용
+   - imagePrompt에서 배경/장소 키워드 추출 → 프롬프트 앞부분에 삽입
+   - motionPrompt는 동작 부분으로 유지
+2. `world_context`를 영어로 변환하여 전달
+3. `enrichedIdea.background` + `enrichedIdea.mood`를 Hailuo 프롬프트에 반영
+4. 캐릭터 외형 묘사 단어("번개", "전기")가 Hailuo 프롬프트에 들어가지 않도록 필터
+
+#### 관련 파일
+- `app/services/prompt_optimizer.py` — `build_hailuo_prompt()` 수정 대상
+- `app/services/video_generation.py` — `_generate_scene_video()` enrichedIdea 전달
+- `app/services/storyboard.py` — enrichedIdea를 콘티 생성 시 저장
+
+---
+
+### 로컬 테스트 제한사항: ffmpeg 미설치
+
+> **영향 범위**: 자막, 더빙(TTS 오버레이), 영상 합본, 렌더링
+> **상태**: 로컬에서 테스트 불가, EC2 서버에서만 동작 확인 가능
+
+#### 테스트 못한 기능
+| 기능 | API | 의존성 | 비고 |
+|------|-----|--------|------|
+| 영상 합본 (씬 병합) | `POST /storyboards/{id}/generate-videos` 내부 merge | ffmpeg (concat + crossfade) | 씬별 영상 생성은 성공, 합본만 실패 |
+| 자막 번인 | `POST /storyboards/{id}/render` | ffmpeg (ASS 자막 필터) | editData의 subtitles 기반 |
+| TTS 오버레이 | `POST /storyboards/{id}/edit/tts` + render | ffmpeg (adelay 믹스) | TTS 생성(OpenAI)은 가능, 오디오 믹싱 불가 |
+| BGM 믹싱 | render 파이프라인 내부 | ffmpeg (amix + ducking) | BGM 프리셋 S3 다운로드도 실패 |
+| 썸네일 프레임 추출 | `POST /storyboards/{id}/thumbnail` | ffmpeg (-ss -frames:v 1) | |
+| 전환 효과 (fade/dissolve/wipe) | render 내부 | ffmpeg (xfade 필터) | |
+| 배속 조절 | render 내부 | ffmpeg (setpts/atempo) | |
+
+#### 로컬에서 테스트 완료된 기능
+- 콘티 생성 (GPT 씬 분할 + FLUX 이미지 생성) ✓
+- 아이디어 구체화 (GPT enrichment) ✓
+- 씬별 영상 생성 (Hailuo I2V) ✓
+- 이미지 재생성 (hero frame 참조 + 배경 일관성) ✓
+- 프로젝트 5단계 트래킹 + stages 응답 ✓
+- DB CRUD 전체 (SSH 터널 경유) ✓
+
+#### 서버 테스트 시 확인할 것
+1. `add_enriched_idea.sql` 마이그레이션 먼저 실행
+2. ffmpeg 설치 확인: `which ffmpeg` (EC2에 이미 있을 수 있음)
+3. BGM 프리셋 S3 접근: `s3://eo-character-assets/bgm/calm.mp3` 등
+4. 전체 렌더링 파이프라인 E2E 테스트: 콘티 생성 → 영상 생성 → 편집 → 렌더링 → 다운로드
 
 ---
 

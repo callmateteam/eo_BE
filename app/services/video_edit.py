@@ -15,6 +15,29 @@ logger = logging.getLogger(__name__)
 _MAX_HISTORY = 50
 
 
+def _split_subtitle(text: str, max_chars: int = 10) -> list[str]:
+    """긴 자막을 max_chars 단위로 자연스럽게 분할
+
+    - 띄어쓰기 기준으로 끊음
+    - 이미 짧으면 그대로 반환
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    words = text.split()
+    chunks: list[str] = []
+    current = ""
+    for word in words:
+        if current and len(current) + 1 + len(word) > max_chars:
+            chunks.append(current)
+            current = word
+        else:
+            current = f"{current} {word}".strip() if current else word
+    if current:
+        chunks.append(current)
+    return chunks or [text]
+
+
 async def get_or_create_edit(storyboard_id: str, user_id: str) -> dict | None:
     """편집 상태 조회 (없으면 스토리보드 기반 초기값 자동 생성)"""
     # 소유권 확인
@@ -148,7 +171,7 @@ async def _build_initial_edit_data(storyboard) -> EditData:
     ]
 
     try:
-        styles = await recommend_subtitle_styles(
+        styles, sub_texts = await recommend_subtitle_styles(
             scene_dicts,
             bgm_mood=storyboard.bgmMood,
             character_name=getattr(storyboard, "title", ""),
@@ -156,22 +179,29 @@ async def _build_initial_edit_data(storyboard) -> EditData:
     except Exception:
         logger.warning("자막 스타일 추천 실패, 기본값 사용")
         styles = [None] * len(scenes)
+        sub_texts = [None] * len(scenes)
 
-    # 나레이션을 GPT 추천 스타일 자막으로 변환
+    # GPT 추천 자막 텍스트 + 스타일로 자막 생성
+    # 긴 텍스트는 자동 분할 (한 번에 최대 10글자)
     subtitles = []
     elapsed = 0.0
     for i, s in enumerate(scenes):
         if s.narration and s.narrationStyle != "none":
             style = styles[i] if i < len(styles) and styles[i] else None
-            item_kwargs = {
-                "scene_id": s.id,
-                "text": s.narration,
-                "start": elapsed,
-                "end": elapsed + s.duration,
-            }
-            if style:
-                item_kwargs["style"] = style
-            subtitles.append(SubtitleItem(**item_kwargs))
+            # GPT가 생성한 숏폼 자막 텍스트 우선, 없으면 나레이션 fallback
+            text = (sub_texts[i] if i < len(sub_texts) and sub_texts[i] else None) or s.narration
+            chunks = _split_subtitle(text, max_chars=10)
+            chunk_duration = s.duration / max(len(chunks), 1)
+            for ci, chunk in enumerate(chunks):
+                item_kwargs = {
+                    "scene_id": s.id,
+                    "text": chunk,
+                    "start": elapsed + ci * chunk_duration,
+                    "end": elapsed + (ci + 1) * chunk_duration,
+                }
+                if style:
+                    item_kwargs["style"] = style
+                subtitles.append(SubtitleItem(**item_kwargs))
         elapsed += s.duration
 
     return EditData(

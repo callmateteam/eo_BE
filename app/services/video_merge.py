@@ -244,8 +244,9 @@ async def merge_storyboard_video(
                 "copy",
                 "-c:v",
                 "libx264",
+                "-crf", "18",
                 "-preset",
-                "fast",
+                "medium",
                 "-movflags",
                 "+faststart",
                 output_path,
@@ -448,7 +449,8 @@ async def _concat_with_crossfade(
             "-map", "[v]",
             "-an",
             "-c:v", "libx264",
-            "-preset", "fast",
+            "-crf", "18",
+            "-preset", "medium",
             out,
         ]
         await _run_ffmpeg(cmd)

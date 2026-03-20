@@ -50,9 +50,19 @@ Style guidelines:
 - Inner thoughts → fadein, top position, slightly transparent
 - Short exclamations → popup with big font, center position
 
+Also generate short, trendy subtitle TEXT for each scene.
+- Subtitle text is NOT the same as narration.
+- Subtitle should be short (1-8 words), punchy, expressive.
+- Use 2024-2025 Korean short-form trends: 상황 설명, 리액션, 짧은 감탄.
+- Examples: "이게 된다고?", "참을 수 없는 맛", "결국 터졌다", \
+"진짜 실화냐", "이 조합 미쳤다", "아 이건 좀..", "ㄹㅇ 레전드"
+- Avoid outdated expressions like "헐 대박", "OMG".
+- Match the scene mood and action.
+
 Output ONLY a JSON array matching the number of scenes. Each element:
 {"font":"...","animation":"...","color":"#...","font_size":36,\
-"outline_size":4,"outline_color":"#000000","position":"bottom","bold":true}"""
+"outline_size":4,"outline_color":"#000000","position":"bottom","bold":true,\
+"text":"짧은 자막 텍스트"}"""
 
 
 async def recommend_subtitle_styles(
@@ -137,12 +147,14 @@ async def recommend_subtitle_styles(
         logger.warning("자막 스타일 GPT 추천 실패, 기본값 사용")
         recs = []
 
-    # 결과를 SubtitleStyle로 변환
+    # 결과를 SubtitleStyle + 텍스트로 변환
     results: list[SubtitleStyle] = [_default_style() for _ in scenes]
+    texts: list[str | None] = [None] * len(scenes)
 
     for idx, (scene_idx, _) in enumerate(narrated):
         if idx < len(recs):
             results[scene_idx] = _parse_recommendation(recs[idx])
+            texts[scene_idx] = recs[idx].get("text")
         else:
             results[scene_idx] = _default_style()
 
@@ -151,7 +163,7 @@ async def recommend_subtitle_styles(
         min(len(recs), len(narrated)),
         len(narrated),
     )
-    return results
+    return results, texts
 
 
 def _parse_recommendation(rec: dict) -> SubtitleStyle:

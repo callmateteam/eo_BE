@@ -31,7 +31,7 @@ SWAGGER_DESCRIPTION = """
 AI 기반 숏폼 영상 생성 플랫폼 백엔드 API
 
 ### 주요 기능
-- **프로젝트**: 4단계 파이프라인 (캐릭터 선택 → 아이디어 입력 → 콘티 생성 → 영상 생성), 단계별 임시저장/재개
+- **프로젝트**: 5단계 파이프라인 (캐릭터 선택 → 아이디어 입력 → 아이디어 구체화 → 콘티 생성 → 영상 생성), 단계별 임시저장/재개
 - **캐릭터**: 프리셋 캐릭터(4개 카테고리) 선택 또는 커스텀 캐릭터 생성 (이미지 2장 + GPT-4o Vision 분석)
 - **콘티(스토리보드)**: GPT-4o-mini 장면 분할 (3~5장) + gpt-image-1 시작 프레임 생성, 씬별 수정/이미지 재생성
 - **영상 생성**: Hailuo(fal.ai) / Pika(fal.ai) 기반 image-to-video, 씬별 병렬 생성 → ffmpeg 자동 병합 (최대 60초)
@@ -43,16 +43,18 @@ AI 기반 숏폼 영상 생성 플랫폼 백엔드 API
 | **A. 기존 캐릭터 선택** | 프리셋 또는 기존 커스텀 캐릭터 선택 후 영상 제작 | 2단계 (아이디어 입력) |
 | **B. 새 캐릭터 생성** | 커스텀 캐릭터 생성(WS 진행률) → 등록 후 영상 제작 | 1단계 (캐릭터 생성) |
 
-### 프로젝트 4단계 트래킹 (`currentStage`)
+### 프로젝트 5단계 트래킹 (`currentStage`)
 | 단계 | stage_name | 설명 | 저장 데이터 |
 |------|------------|------|------------|
 | 1 | CHARACTER_SELECT | 캐릭터 생성 또는 선택 | character_id 또는 custom_character_id |
 | 2 | IDEA_INPUT | 아이디어 텍스트 입력 | idea (최대 2000자) |
-| 3 | STORYBOARD | 콘티 생성 및 씬별 수정 | storyboard_id (씬 데이터 포함) |
-| 4 | VIDEO_GENERATION | 씬별 영상 생성 및 편집 | 각 씬 videoUrl + finalVideoUrl |
+| 3 | IDEA_ENRICHMENT | GPT 아이디어 구체화 (배경/분위기/캐릭터/스토리) → 사용자 수정 후 확정 | enrichedIdea (JSON) |
+| 4 | STORYBOARD | 콘티 생성 및 씬별 수정 (enrichedIdea 기반) | storyboard_id (씬 데이터 포함) |
+| 5 | VIDEO_GENERATION | 씬별 영상 생성 및 편집 | 각 씬 videoUrl + finalVideoUrl |
 
 - 수정 시 `currentStage` 기준으로 해당 단계 화면부터 재개
 - `PATCH /api/projects/{id}`로 단계별 데이터 저장 시 자동으로 `currentStage` 진행
+- `GET /api/projects/{id}` 응답에 `stages` 배열로 전체 단계별 상태/데이터 포함
 
 ### 인증 방식
 - **쿠키 기반 JWT (HS256)**: 로그인 시 `access_token`(30분, httpOnly) + `refresh_token`(7일, httpOnly, path=/api/auth) 쿠키 자동 설정
@@ -124,12 +126,16 @@ AI 기반 숏폼 영상 생성 플랫폼 백엔드 API
 |--------|------|---------|------|---------|
 | POST | `` | 프로젝트 생성 (title + keyword + character_id 또는 custom_character_id) | O | 201, 400, 401 |
 | GET | `` | 내 프로젝트 목록 (썸네일, 캐릭터명, currentStage, progress 포함) | O | 200, 401 |
-| GET | `/{project_id}` | 프로젝트 상세 (본인 소유만, 단계별 데이터 전부 포함) | O | 200, 401, 404 |
-| PATCH | `/{project_id}` | 프로젝트 수정 (title, keyword, idea, character_id, custom_character_id, storyboard_id, current_stage) | O | 200, 400, 401, 404 |
+| GET | `/{project_id}` | 프로젝트 상세 (본인 소유만, 5단계 stages 배열 + 전체 데이터 포함) | O | 200, 401, 404 |
+| PATCH | `/{project_id}` | 프로젝트 수정 (title, keyword, idea, enriched_idea, character_id, custom_character_id, storyboard_id, current_stage) | O | 200, 400, 401, 404 |
+| POST | `/{project_id}/enrich-idea` | 아이디어 구체화 — GPT가 배경/분위기/메인캐릭터/보조캐릭터/스토리로 구조화 (미리보기) | O | 200, 400, 401, 404 |
+| POST | `/{project_id}/confirm-enriched-idea` | 구체화 아이디어 확정 — 사용자 수정 반영 후 3단계 완료 → stage 3 진행 | O | 200, 400, 401, 404 |
 | DELETE | `/{project_id}` | 프로젝트 삭제 (본인 소유만) | O | 204, 401, 404 |
 
 - **목록 응답 필드**: id, title, current_stage, stage_name, character_name, character_image, thumbnail_url, status, status_label, progress(%), created_at, updated_at
+- **상세 응답**: 위 필드 + idea, enriched_idea(JSON), storyboard_id, **stages**(5단계 배열: stage, name, label, completed, data)
 - **썸네일**: 연결된 스토리보드의 heroFrameUrl 또는 첫 번째 씬 imageUrl
+- **아이디어 구체화 플로우**: `enrich-idea`(GPT 미리보기) → 프론트에서 편집 → `confirm-enriched-idea`(확정) → 콘티 생성 시 enrichedIdea 자동 반영
 
 #### Storyboards (`/api/storyboards`) — tag: `storyboards`
 | Method | Path | Summary | 인증 | 상태코드 |
@@ -329,18 +335,54 @@ app.add_middleware(
 )
 
 
+_FIELD_NAMES_KR: dict[str, str] = {
+    "idea": "아이디어",
+    "title": "제목",
+    "keyword": "키워드",
+    "character_id": "캐릭터",
+    "name": "이름",
+    "description": "설명",
+}
+
+
+def _translate_error(field: str | None, msg: str) -> str:
+    """Pydantic 에러 메시지를 한글로 변환"""
+    field_kr = _FIELD_NAMES_KR.get(field or "", field or "입력값")
+
+    if "at least" in msg:
+        # "String should have at least 10 characters"
+        import re
+        m = re.search(r"at least (\d+)", msg)
+        if m:
+            return f"{field_kr}은(는) 최소 {m.group(1)}자 이상 입력해주세요."
+    if "at most" in msg or "max_length" in msg:
+        import re
+        m = re.search(r"at most (\d+)", msg) or re.search(r"(\d+)", msg)
+        if m:
+            return f"{field_kr}은(는) 최대 {m.group(1)}자까지 입력 가능합니다."
+    if "required" in msg.lower() or "missing" in msg.lower():
+        return f"{field_kr}은(는) 필수 입력 항목입니다."
+    if "none is not an allowed" in msg.lower():
+        return f"{field_kr}을(를) 입력해주세요."
+    return f"{field_kr}: {msg}"
+
+
 @app.exception_handler(ValidationError)
 async def validation_error_handler(request: Request, exc: ValidationError):
     """Pydantic 유효성 검사 에러를 상세 한글 메시지로 변환"""
     errors = []
     for error in exc.errors():
         field = ".".join(str(loc) for loc in error["loc"]) if error["loc"] else None
-        errors.append({"field": field, "message": error["msg"]})
+        kr_msg = _translate_error(field, error["msg"])
+        errors.append({"field": field, "message": kr_msg})
+
+    # 첫 번째 에러를 detail에 표시
+    detail = errors[0]["message"] if errors else "입력값이 올바르지 않습니다."
 
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
-            "detail": "입력값이 올바르지 않습니다.",
+            "detail": detail,
             "errors": errors,
         },
     )

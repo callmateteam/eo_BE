@@ -90,7 +90,11 @@ Static opening freeze-frame, NOT mid-action. \
 NO text/letters/words in the image. \
 NEVER include character appearance details (hair, eyes, outfit) — \
 those are handled separately. \
-NEVER use character names, series names, or franchise names.
+NEVER use character names, series names, or franchise names. \
+IMPORTANT: Always describe clear, simple poses where hands and limbs \
+are fully visible and not overlapping. Avoid complex hand gestures. \
+Prefer poses like: arms at sides, hands on table, hands behind back, \
+arms crossed. Keep hands away from face.
 - motionPrompt: English, max 30 words. Describe ONLY the motion/action \
 that should happen in this scene. Do NOT repeat what's visible in \
 the image. Be SPECIFIC and PHYSICAL: describe exact body part movements, \
@@ -117,8 +121,10 @@ burning at the tip of its tail, blue eyes, cream-colored belly". \
 For 리자몽 → "large orange dragon with wings, flame on tail tip". \
 Also include this secondary character in imagePrompt scenes \
 where they appear.
-- narration: Korean TTS text. null if silent
-- narrationStyle: "character"|"narrator"|"none"
+- narration: Korean TTS narration text. REQUIRED for every scene, never null. \
+Write 1-2 sentences describing or narrating what happens in the scene. \
+Use engaging, expressive tone suitable for short-form video narration.
+- narrationStyle: "character"|"narrator" (always pick one, never "none")
 - bgmMood: overall BGM mood (first scene only): \
 epic/funny/calm/tense/sad/upbeat/mysterious
 - Vary visual composition: mix close-ups, medium, wide shots across scenes.
@@ -133,6 +139,7 @@ STORYBOARD_USER = """\
 세계관/배경: {world_context}
 아트 스타일: {art_style}
 아이디어: {idea}
+{enriched_section}\
 60초 이내 숏폼 콘티 생성. 배경은 세계관에 맞게 구성.
 NOTE: imagePrompt에 캐릭터 외형을 쓰지 마세요. 장면/포즈/배경만 작성."""
 
@@ -148,17 +155,40 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _IMAGE_SEMAPHORE
 
 
+def _build_enriched_section(enriched_idea: dict | None) -> str:
+    """enrichedIdea JSON을 프롬프트 텍스트로 변환한다."""
+    if not enriched_idea:
+        return ""
+    parts = []
+    if enriched_idea.get("background"):
+        parts.append(f"배경 설정: {enriched_idea['background']}")
+    if enriched_idea.get("mood"):
+        parts.append(f"분위기/톤: {enriched_idea['mood']}")
+    if enriched_idea.get("main_character"):
+        parts.append(f"메인 캐릭터 상세: {enriched_idea['main_character']}")
+    if enriched_idea.get("supporting_characters"):
+        chars = ", ".join(enriched_idea["supporting_characters"])
+        parts.append(f"보조 캐릭터: {chars}")
+    if enriched_idea.get("story"):
+        parts.append(f"스토리 구조: {enriched_idea['story']}")
+    if parts:
+        return "\n".join(parts) + "\n"
+    return ""
+
+
 async def generate_scenes_with_gpt(
     character_desc: str,
     idea: str,
     *,
     world_context: str = "",
     art_style: str = "",
+    enriched_idea: dict | None = None,
 ) -> tuple[list[dict], str | None]:
     """GPT-4o-mini로 콘티 장면 분할 생성 (최대 3회 재시도)"""
     client = get_openai_client()
     max_retries = 3
     last_error: Exception | None = None
+    enriched_section = _build_enriched_section(enriched_idea)
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -183,6 +213,7 @@ async def generate_scenes_with_gpt(
                                     idea=idea,
                                     world_context=world_context or "일반적인 배경",
                                     art_style=art_style or "anime style",
+                                    enriched_section=enriched_section,
                                 ),
                             },
                         ],
@@ -236,10 +267,13 @@ async def generate_scenes_with_gpt(
     for s in scenes:
         narration_raw = s.get("narration")
         narration = str(narration_raw)[:1000] if narration_raw else None
-        narration_style = str(s.get("narrationStyle", "none"))
-        if narration_style not in ("character", "narrator", "none"):
-            narration_style = "none"
-        # narration이 없으면 style도 none으로 통일
+        narration_style = str(s.get("narrationStyle", "narrator"))
+        if narration_style not in ("character", "narrator"):
+            narration_style = "narrator"
+        # narration이 없으면 content 첫 문장을 나레이션으로 사용
+        if not narration:
+            content_text = str(s.get("content", ""))
+            narration = content_text.split(".")[0].strip()[:200] or None
         if not narration:
             narration_style = "none"
 
@@ -316,13 +350,27 @@ async def generate_scene_image(
     # 캐릭터 이름을 프롬프트에 포함 (FLUX는 저작권 필터 없음)
     name_text = f"{character_name}. " if character_name else ""
 
+    # 해부학 방어 (손가락/팔 개수 오류 방지)
+    anatomy_guard = (
+        "Anatomically correct: exactly two arms, two hands with five fingers each, "
+        "two legs. No extra or missing limbs. No deformed hands or fingers."
+    )
+
     if reference_image_url:
-        # Kontext: 레퍼런스 이미지가 캐릭터를 정의 → 프롬프트는 씬/배경/포즈만
+        # Kontext: 레퍼런스 이미지가 캐릭터를 정의하므로 캐릭터 외형 묘사 제거
+        # character_desc가 image_prompt 앞에 붙어있으면 제거 (씬 묘사만 남김)
+        scene_only_prompt = image_prompt
+        if character_desc and scene_only_prompt.startswith(character_desc):
+            scene_only_prompt = scene_only_prompt[len(character_desc):].lstrip(". ")
+
         full_prompt = (
-            f"Same character from reference image in new scene. "
-            f"{image_prompt}. "
+            f"Same character and same background setting from reference image. "
+            f"Keep the same art style, color palette, and indoor/outdoor location. "
+            f"No lightning effects, no weather effects inside the room. "
+            f"{scene_only_prompt}. "
             f"{bg_text}"
             f"{style_text}. {lighting}. "
+            f"{anatomy_guard}. "
             "No text or letters in the image."
         )[:2000]
     else:
@@ -332,6 +380,7 @@ async def generate_scene_image(
             f"{image_prompt}. "
             f"{bg_text}"
             f"{style_text}. {lighting}. "
+            f"{anatomy_guard}. "
             "No text or letters in the image."
         )[:4000]
 
@@ -587,6 +636,7 @@ async def process_storyboard(
     world_context: str = "",
     art_style: str = "",
     character_name: str = "",
+    enriched_idea: dict | None = None,
 ) -> None:
     """콘티 생성 전체 파이프라인 (백그라운드)"""
 
@@ -602,6 +652,7 @@ async def process_storyboard(
             idea,
             world_context=world_context,
             art_style=art_style,
+            enriched_idea=enriched_idea,
         )
         await notify(30, f"{len(scenes)}개 장면 생성 완료")
 
@@ -795,12 +846,24 @@ async def process_storyboard(
 async def content_to_image_prompt(
     content: str,
     character_desc: str,
+    *,
+    background_context: str = "",
 ) -> str:
     """콘티 설명(한글)을 이미지 생성용 영문 프롬프트로 변환
 
     캐릭터 묘사는 GPT에게 맡기지 않고, 장면 묘사만 영문 변환 후
     코드에서 캐릭터 묘사를 앞에 직접 붙인다 (일관성 보장).
+
+    background_context가 주어지면 기존 씬의 배경/장소를 유지하도록 강제한다.
     """
+    bg_instruction = ""
+    if background_context:
+        bg_instruction = (
+            f" IMPORTANT: This scene takes place in the SAME location as "
+            f"the other scenes: {background_context}. Keep the background "
+            f"setting consistent. Do NOT change the location."
+        )
+
     client = get_openai_client()
     async with asyncio.timeout(30):
         resp = await client.post(
@@ -823,6 +886,7 @@ async def content_to_image_prompt(
                             "Do NOT describe the character's appearance "
                             "(hair, eyes, outfit) — that will be added "
                             "separately. NEVER include text/letters/words."
+                            f"{bg_instruction}"
                         ),
                     },
                     {
@@ -864,12 +928,81 @@ async def regenerate_scene_image_task(
         )
         await notify(15, "콘티 설명을 분석하고 있습니다...")
 
-        # 현재 content 기반으로 새 imagePrompt 생성
-        new_prompt = await content_to_image_prompt(scene.content, character_desc)
+        # 기존 씬들의 배경 컨텍스트 추출 (첫 번째 씬의 content에서)
+        first_scene = await db.storyboardscene.find_first(
+            where={"storyboardId": scene.storyboardId, "sceneOrder": 1},
+        )
+        background_context = ""
+        if first_scene and first_scene.id != scene.id:
+            # 첫 씬의 content에서 배경 힌트 추출
+            background_context = first_scene.content[:200]
+
+        # 프로젝트의 enrichedIdea에서 배경 정보도 확인
+        linked_project = await db.project.find_first(
+            where={"storyboardId": scene.storyboardId},
+        )
+        if linked_project and getattr(linked_project, "enrichedIdea", None):
+            enriched = linked_project.enrichedIdea
+            if isinstance(enriched, dict) and enriched.get("background"):
+                background_context = enriched["background"]
+
+        # 현재 content 기반으로 새 imagePrompt 생성 (배경 컨텍스트 포함)
+        new_prompt = await content_to_image_prompt(
+            scene.content, character_desc,
+            background_context=background_context,
+        )
         await notify(35, "이미지 프롬프트 생성 완료")
 
+        # 레퍼런스 이미지 조회 (캐릭터 + 배경 일관성 유지)
+        # 우선순위: hero frame > 캐릭터 프리셋 이미지
+        # hero frame은 캐릭터 + 아트 스타일 + 배경이 모두 녹아있어
+        # 재생성 시에도 기존 씬들과 동일한 분위기를 유지한다.
+        storyboard = await db.storyboard.find_unique(
+            where={"id": scene.storyboardId},
+        )
+        ref_url = None
+        art_style = ""
+        world_context = ""
+        bgm_mood = None
+        char_name = ""
+
+        # 1순위: hero frame (기존 씬과 배경/스타일 일관성)
+        if storyboard and storyboard.heroFrameUrl:
+            ref_url = storyboard.heroFrameUrl
+        # 2순위: 캐릭터 프리셋 이미지 (hero frame 없을 때)
+        if not ref_url:
+            if storyboard and storyboard.characterId:
+                char = await db.character.find_unique(where={"id": storyboard.characterId})
+                if char:
+                    ref_url = char.imageUrl
+            elif storyboard and storyboard.customCharacterId:
+                cc = await db.customcharacter.find_unique(where={"id": storyboard.customCharacterId})
+                if cc:
+                    ref_url = cc.imageUrl1
+
+        # 캐릭터 메타 정보 (아트 스타일, 세계관, BGM)
+        if storyboard and storyboard.characterId:
+            char = await db.character.find_unique(where={"id": storyboard.characterId})
+            if char:
+                art_style = char.artStyle or ""
+                world_context = char.worldContext or ""
+                char_name = char.name or ""
+        elif storyboard and storyboard.customCharacterId:
+            cc = await db.customcharacter.find_unique(where={"id": storyboard.customCharacterId})
+            if cc:
+                char_name = cc.name or ""
+        if storyboard:
+            bgm_mood = storyboard.bgmMood
+
         await notify(45, "AI가 시작 프레임을 생성하고 있습니다...")
-        s3_url, _ = await generate_scene_image(new_prompt, character_desc, user_id)
+        s3_url, _ = await generate_scene_image(
+            new_prompt, character_desc, user_id,
+            reference_image_url=ref_url,
+            art_style=art_style,
+            world_context=world_context,
+            bgm_mood=bgm_mood,
+            character_name=char_name,
+        )
 
         # 이미지 + 새 프롬프트 모두 DB에 저장
         await db.storyboardscene.update(

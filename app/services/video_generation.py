@@ -246,12 +246,32 @@ async def _generate_scene_video(
 
             prompt = hailuo_result["prompt"]
 
-            # S3 이미지 자동 선택 (장면에 맞는 최적 포즈)
-            image_url = select_best_image(
-                extra_images=char_info.get("extra_images", ""),
-                scene_type=hailuo_result.get("_scene_type", "default"),
-                base_image_url=char_info.get("image_url", scene.imageUrl or ""),
-            )
+            # 씬 이미지 사용 (FLUX가 생성한 9:16 이미지)
+            # fallback 이미지(캐릭터 원본)면 자동 재생성 시도
+            scene_image = scene.imageUrl or ""
+            is_fallback = "characters/" in scene_image and "/image" in scene_image
+            if is_fallback or not scene_image:
+                logger.info("fallback 이미지 감지, 자동 재생성: scene=%s", scene.id)
+                try:
+                    from app.services.storyboard import generate_scene_image
+                    new_url, _ = await generate_scene_image(
+                        image_prompt=scene.imagePrompt or "",
+                        character_desc=char_info.get("description", ""),
+                        user_id=user_id,
+                        reference_image_url=char_info.get("image_url", ""),
+                        art_style=char_info.get("art_style", ""),
+                        world_context=char_info.get("world_context", ""),
+                    )
+                    await db.storyboardscene.update(
+                        where={"id": scene.id},
+                        data={"imageUrl": new_url, "imageStatus": "COMPLETED"},
+                    )
+                    scene_image = new_url
+                    logger.info("이미지 자동 재생성 성공: scene=%s", scene.id)
+                except Exception:
+                    logger.exception("이미지 자동 재생성 실패, 원본 사용: scene=%s", scene.id)
+                    scene_image = scene_image or char_info.get("image_url", "")
+            image_url = scene_image
 
             # 영상 생성 → URL 반환
             result_url = await generator.generate(

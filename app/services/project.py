@@ -1,4 +1,4 @@
-"""프로젝트 서비스 레이어 - DB 로직 + 4단계 트래킹"""
+"""프로젝트 서비스 레이어 - DB 로직 + 5단계 트래킹"""
 
 from __future__ import annotations
 
@@ -12,14 +12,16 @@ logger = logging.getLogger(__name__)
 
 STAGE_CHARACTER_SELECT = 1
 STAGE_IDEA_INPUT = 2
-STAGE_STORYBOARD = 3
-STAGE_VIDEO_GENERATION = 4
+STAGE_IDEA_ENRICHMENT = 3
+STAGE_STORYBOARD = 4
+STAGE_VIDEO_GENERATION = 5
 
 STAGE_NAMES = {
     1: "CHARACTER_SELECT",
     2: "IDEA_INPUT",
-    3: "STORYBOARD",
-    4: "VIDEO_GENERATION",
+    3: "IDEA_ENRICHMENT",
+    4: "STORYBOARD",
+    5: "VIDEO_GENERATION",
 }
 
 # 프로젝트 include 옵션 (캐릭터 + 커스텀캐릭터 + 스토리보드 썸네일)
@@ -43,8 +45,13 @@ def _has_idea(record: object) -> bool:
     return bool(getattr(record, "idea", None))
 
 
+def _has_enriched_idea(record: object) -> bool:
+    """3단계 데이터(구조화된 아이디어) 존재 여부"""
+    return bool(getattr(record, "enrichedIdea", None))
+
+
 def _has_storyboard(record: object) -> bool:
-    """3단계 데이터(스토리보드) 존재 여부"""
+    """4단계 데이터(스토리보드) 존재 여부"""
     return bool(getattr(record, "storyboardId", None))
 
 
@@ -56,10 +63,12 @@ def _validate_stage_prerequisites(record: object, target_stage: int) -> None:
     """
     if target_stage >= STAGE_IDEA_INPUT and not _has_character(record):
         raise ValueError("1단계(캐릭터 선택)를 먼저 완료해주세요")
-    if target_stage >= STAGE_STORYBOARD and not _has_idea(record):
+    if target_stage >= STAGE_IDEA_ENRICHMENT and not _has_idea(record):
         raise ValueError("2단계(아이디어 입력)를 먼저 완료해주세요")
+    if target_stage >= STAGE_STORYBOARD and not _has_enriched_idea(record):
+        raise ValueError("3단계(아이디어 구체화)를 먼저 완료해주세요")
     if target_stage >= STAGE_VIDEO_GENERATION and not _has_storyboard(record):
-        raise ValueError("3단계(스토리보드)를 먼저 완료해주세요")
+        raise ValueError("4단계(스토리보드)를 먼저 완료해주세요")
 
 
 def _compute_auto_stage(current_stage: int, data: dict, record: object) -> int:
@@ -67,7 +76,8 @@ def _compute_auto_stage(current_stage: int, data: dict, record: object) -> int:
 
     규칙:
     - idea가 설정되고 현재 stage < 2 → stage 2로 진행
-    - storyboardId가 설정되고 현재 stage < 3 → stage 3로 진행
+    - enrichedIdea가 설정되고 현재 stage < 3 → stage 3으로 진행
+    - storyboardId가 설정되고 현재 stage < 4 → stage 4로 진행
     - 명시적 currentStage가 있으면 그 값 우선
     - 캐릭터가 변경되면 stage 1로 리셋 (이전 데이터는 유지, 프론트에서 재확인)
     """
@@ -86,7 +96,11 @@ def _compute_auto_stage(current_stage: int, data: dict, record: object) -> int:
     if "idea" in data and current_stage < STAGE_IDEA_INPUT:
         new_stage = STAGE_IDEA_INPUT
 
-    # storyboardId 설정 → stage 3로 자동 진행
+    # enrichedIdea 설정 → stage 3으로 자동 진행
+    if "enrichedIdea" in data and new_stage < STAGE_IDEA_ENRICHMENT:
+        new_stage = STAGE_IDEA_ENRICHMENT
+
+    # storyboardId 설정 → stage 4로 자동 진행
     if "storyboardId" in data and new_stage < STAGE_STORYBOARD:
         new_stage = STAGE_STORYBOARD
 
@@ -171,6 +185,7 @@ async def update_project(
         "custom_character_id": "customCharacterId",
         "storyboard_id": "storyboardId",
         "idea": "idea",
+        "enriched_idea": "enrichedIdea",
         "current_stage": "currentStage",
     }
 
@@ -249,7 +264,7 @@ async def link_storyboard(project_id: str, storyboard_id: str) -> None:
         },
     )
     logger.info(
-        "프로젝트-스토리보드 연결: project=%s storyboard=%s → stage 3",
+        "프로젝트-스토리보드 연결: project=%s storyboard=%s → stage 4",
         project_id,
         storyboard_id,
     )
@@ -294,7 +309,7 @@ async def advance_to_video_complete(project_id: str) -> None:
             "status": "COMPLETED",
         },
     )
-    logger.info("프로젝트 4단계(영상완료) 자동 진행: %s", project_id)
+    logger.info("프로젝트 5단계(영상완료) 자동 진행: %s", project_id)
 
 
 async def list_projects(user_id: str) -> list[object]:

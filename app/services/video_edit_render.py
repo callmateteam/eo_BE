@@ -218,8 +218,22 @@ async def _trim_and_speed(
             atempo = 0.5
         elif atempo > 2.0:
             atempo = 2.0
-        cmd.extend(["-filter_complex", f"[0:v]setpts={pts}*PTS[v];[0:a]atempo={atempo}[a]"])
-        cmd.extend(["-map", "[v]", "-map", "[a]"])
+        # 오디오 트랙 존재 여부 확인 (ffprobe)
+        probe_cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "a",
+            "-show_entries", "stream=index", "-of", "csv=p=0", input_path,
+        ]
+        probe = await asyncio.create_subprocess_exec(
+            *probe_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        probe_out, _ = await probe.communicate()
+        has_audio = bool(probe_out.strip())
+
+        if has_audio:
+            cmd.extend(["-filter_complex", f"[0:v]setpts={pts}*PTS[v];[0:a]atempo={atempo}[a]"])
+            cmd.extend(["-map", "[v]", "-map", "[a]"])
+        else:
+            cmd.extend(["-filter:v", f"setpts={pts}*PTS", "-an"])
     else:
         cmd.extend(["-c", "copy"])
 
@@ -301,8 +315,9 @@ async def _concat_with_transitions(files: list[str], transitions: list, output_p
                 "[a]",
                 "-c:v",
                 "libx264",
+                "-crf", "18",
                 "-preset",
-                "fast",
+                "medium",
                 out,
             ]
             await _run_ffmpeg(cmd)
@@ -644,8 +659,9 @@ async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> N
         "copy",
         "-c:v",
         "libx264",
+        "-crf", "18",
         "-preset",
-        "fast",
+        "medium",
         "-movflags",
         "+faststart",
         output_path,

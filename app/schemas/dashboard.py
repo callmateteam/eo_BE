@@ -18,9 +18,9 @@ class ProjectStatus(str, Enum):  # noqa: UP042
 # 상태별 진행률 매핑
 STATUS_PROGRESS: dict[ProjectStatus, int] = {
     ProjectStatus.CREATED: 0,
-    ProjectStatus.SCRIPT_WRITTEN: 25,
-    ProjectStatus.VOICE_GENERATED: 50,
-    ProjectStatus.VIDEO_GENERATED: 75,
+    ProjectStatus.SCRIPT_WRITTEN: 20,
+    ProjectStatus.VOICE_GENERATED: 40,
+    ProjectStatus.VIDEO_GENERATED: 70,
     ProjectStatus.COMPLETED: 100,
 }
 

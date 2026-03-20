@@ -101,6 +101,7 @@ model Project {
   customCharacterId String?       @map("custom_character_id") @db.Uuid
   storyboardId      String?       @unique @map("storyboard_id") @db.Uuid
   idea              String?       @db.VarChar(2000)
+  enrichedIdea      Json?         @map("enriched_idea")
   status            ProjectStatus @default(CREATED)
   userId            String        @map("user_id") @db.Uuid
   createdAt         DateTime      @default(now()) @map("created_at")
