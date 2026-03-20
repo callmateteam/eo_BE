@@ -61,7 +61,7 @@ _ACTION_KEYWORDS: dict[str, str] = {
     "자르": "cooking",
     "썰": "cooking",
     "볶": "cooking",
-    "eat": "eating",
+    "eating": "eating",
     "먹": "eating",
     "drink": "eating",
     "마시": "eating",
@@ -195,10 +195,9 @@ def build_hailuo_prompt(
         camera = _CAMERA_BY_POSITION["middle"]
     parts.append(camera)
 
-    # 2. 캐릭터 보존 (1문장으로 간결하게)
-    parts.append(
-        "Preserve exact character colors and design from reference image."
-    )
+    # 2. 배경/환경 (world_context가 있으면 포함)
+    if world_context:
+        parts.append(f"Scene set in {world_context}.")
 
     # 3. 동작 (영어만 — motionPrompt 우선, imagePrompt fallback)
     if motion_prompt:
@@ -206,11 +205,15 @@ def build_hailuo_prompt(
     elif image_prompt:
         parts.append(image_prompt)
 
-    # 4. 동작 보강 (자연스러운 움직임 — 간결)
+    # 4. 동작 보강 (자연스러운 움직임)
     parts.append(motion_enhancer)
 
-    # 5. 품질 앵커 (짧게)
-    parts.append("Smooth animation, consistent character appearance.")
+    # 5. 캐릭터 보존 + 품질 (반드시 마지막 — 모델이 뒤쪽 지시를 더 잘 따름)
+    parts.append(
+        "Maintain exact character colors, proportions, and design "
+        "from reference image throughout the entire clip. "
+        "Smooth fluid animation."
+    )
 
     # 자연스러운 문장형 조합
     prompt = " ".join(p for p in parts if p)

@@ -93,7 +93,9 @@ those are handled separately. \
 NEVER use character names, series names, or franchise names.
 - motionPrompt: English, max 30 words. Describe ONLY the motion/action \
 that should happen in this scene. Do NOT repeat what's visible in \
-the image. Focus on: movement direction, speed, gestures, expressions.
+the image. Be SPECIFIC and PHYSICAL: describe exact body part movements, \
+direction, speed. Example: "Character swings right arm forward in a punch, \
+body rotating left, legs planted wide" NOT "Character attacks".
 - title: Korean, short (2-5 words)
 - content: Korean, 2-3 sentences describing the scene in detail. \
 Include: what the character is doing, their expression/emotion, \
