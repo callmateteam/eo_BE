@@ -133,6 +133,15 @@ async def process_storyboard_videos(
         completed_scenes = [
             s for s in updated_scenes if s.videoStatus == "COMPLETED" and s.videoUrl
         ]
+        failed_url_scenes = [
+            s for s in updated_scenes if s.videoStatus == "COMPLETED" and not s.videoUrl
+        ]
+        if failed_url_scenes:
+            logger.error(
+                "videoStatus=COMPLETED but videoUrl=None인 씬 %d개 발견! scene_ids=%s",
+                len(failed_url_scenes),
+                [s.id for s in failed_url_scenes],
+            )
 
         if completed_scenes:
             try:
@@ -262,7 +271,17 @@ async def _generate_scene_video(
             )
 
             # 영상 URL → S3 업로드
+            logger.info(
+                "영상 생성 결과 URL: scene=%s, result_url=%s",
+                scene.id, result_url[:200] if result_url else "None",
+            )
             video_url = await _download_and_upload(result_url, user_id)
+
+            if not video_url:
+                raise RuntimeError(
+                    f"영상 S3 업로드 실패: result_url={result_url}, "
+                    f"video_url=None"
+                )
 
             await db.storyboardscene.update(
                 where={"id": scene.id},
@@ -272,6 +291,7 @@ async def _generate_scene_video(
                     "videoError": None,
                 },
             )
+            logger.info("영상 저장 완료: scene=%s, videoUrl=%s", scene.id, video_url[:80])
 
             elapsed = time.monotonic() - scene_start
             completed_durations.append(elapsed)
@@ -414,11 +434,13 @@ async def _download_and_upload(
     video_url: str | None,
     user_id: str,
 ) -> str | None:
-    """영상 URL을 다운로드하여 S3에 업로드 → S3 URL 반환
+    """영상 URL을 다운로드하여 S3에 업로드 → S3 URL 반환"""
+    if not video_url:
+        logger.error("영상 URL이 None — 다운로드 건너뜀")
+        return None
 
-    Mock(url=task_id_hex)이면 None 반환.
-    """
-    if not video_url or not video_url.startswith("http"):
+    if not video_url.startswith("http"):
+        logger.error("영상 URL이 http로 시작하지 않음: %s", video_url[:100])
         return None
 
     async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
@@ -426,7 +448,9 @@ async def _download_and_upload(
         resp.raise_for_status()
         video_bytes = resp.content
 
+    logger.info("영상 다운로드 완료: %d bytes", len(video_bytes))
     s3_url = await asyncio.to_thread(upload_video, video_bytes, user_id)
+    logger.info("영상 S3 업로드 완료: %s", s3_url[:80] if s3_url else "None")
     return s3_url
 
 
