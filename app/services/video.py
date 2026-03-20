@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import uuid
 from abc import ABC, abstractmethod
@@ -10,8 +11,57 @@ from abc import ABC, abstractmethod
 import httpx
 
 from app.core.config import settings
+from app.core.s3 import upload_image
 
 logger = logging.getLogger(__name__)
+
+# 이미지 최소 크기 (Hailuo API 요구사항)
+_MIN_IMAGE_SIZE = 300
+
+
+async def ensure_min_image_size(image_url: str, user_id: str = "system") -> str:
+    """이미지가 300x300 미만이면 업스케일 후 S3에 재업로드, 새 URL 반환"""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(image_url)
+            resp.raise_for_status()
+            img_data = resp.content
+
+        # PIL로 크기 확인
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(img_data))
+        w, h = img.size
+
+        if w >= _MIN_IMAGE_SIZE and h >= _MIN_IMAGE_SIZE:
+            return image_url  # 크기 충분
+
+        # 업스케일: 최소 300x300 이상으로
+        scale = max(_MIN_IMAGE_SIZE / w, _MIN_IMAGE_SIZE / h, 1.0)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+
+        logger.warning(
+            "이미지 업스케일: %dx%d → %dx%d (%s)",
+            w, h, new_w, new_h, image_url.split("/")[-1],
+        )
+
+        # S3에 재업로드
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        new_url = await asyncio.to_thread(
+            upload_image,
+            buf.getvalue(),
+            user_id,
+            content_type="image/png",
+            folder="upscaled-images",
+        )
+        return new_url
+    except Exception:
+        logger.exception("이미지 크기 검증/업스케일 실패: %s", image_url)
+        return image_url  # 실패 시 원본 그대로 반환
 
 # Pika 폴링 설정
 _PIKA_POLL_INTERVAL = 10
@@ -184,6 +234,10 @@ class HailuoVideoGenerator(VideoGenerator):
             "Content-Type": "application/json",
         }
 
+        # 이미지 크기 검증 + 자동 업스케일 (300x300 미만 방지)
+        if image_url:
+            image_url = await ensure_min_image_size(image_url)
+
         body: dict = {
             "prompt": prompt,
             "prompt_optimizer": False,
@@ -199,7 +253,18 @@ class HailuoVideoGenerator(VideoGenerator):
 
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(self._base, json=body, headers=headers)
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                error_text = resp.text[:500]
+                logger.error(
+                    "Hailuo 요청 실패 (%d): %s", resp.status_code, error_text,
+                )
+                # 이미지 크기 관련 에러 감지
+                if "dimensions" in error_text.lower() or "small" in error_text.lower():
+                    raise RuntimeError(
+                        f"이미지 크기가 너무 작습니다 (최소 300x300). "
+                        f"이미지 URL: {image_url}"
+                    )
+                resp.raise_for_status()
             data = resp.json()
 
         request_id = data.get("request_id")

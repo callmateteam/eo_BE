@@ -38,17 +38,20 @@ async def render_with_edits(
     8. S3 업로드
     """
 
+    final_url_holder: list[str | None] = [None]
+
     async def notify(pct: int, step: str) -> None:
         if progress_callback:
             status = "FAILED" if pct < 0 else ("RENDER_READY" if pct >= 100 else "RENDERING")
-            await progress_callback(
-                {
-                    "storyboard_id": storyboard_id,
-                    "status": status,
-                    "progress": max(pct, 0),
-                    "step": step,
-                }
-            )
+            msg: dict = {
+                "storyboard_id": storyboard_id,
+                "status": status,
+                "progress": max(pct, 0),
+                "step": step,
+            }
+            if status == "RENDER_READY" and final_url_holder[0]:
+                msg["final_video_url"] = final_url_holder[0]
+            await progress_callback(msg)
 
     try:
         # 씬 영상 URL 조회
@@ -155,6 +158,7 @@ async def render_with_edits(
                 data={"finalVideoUrl": video_url},
             )
 
+            final_url_holder[0] = video_url
             await notify(100, "렌더링 완료!")
             return video_url
 
