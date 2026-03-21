@@ -1,13 +1,13 @@
-"""Hailuo I2V 프롬프트 최적화 엔진 v3
+"""Hailuo I2V 프롬프트 최적화 엔진 v4
 
 핵심 원칙 (리서치 기반):
-1. 이미지에 보이는 것은 반복하지 않음 (동작/변화만 명시)
-2. motionPrompt를 우선 사용 (GPT가 생성한 동작 전용 프롬프트)
-3. 80-150 단어 이내, 자연스러운 문장 (목록형 금지)
+1. imagePrompt를 배경 컨텍스트로 직접 사용 (키워드 매칭 제거)
+2. motionPrompt를 동작 전용으로만 사용 (imagePrompt fallback 제거)
+3. 90단어 이내, 자연스러운 문장 (목록형 금지)
 4. 자연스러운 관절/동작 키워드 필수 (로봇 동작 방지)
 5. Hailuo [bracket] 카메라 문법 사용
 6. 캐릭터 일관성 키워드 필수 삽입
-7. artStyle은 영문으로 작성 (Hailuo 모델 호환)
+7. anti-text 지시 필수 (영어 텍스트 시각적 렌더링 방지)
 """
 
 from __future__ import annotations
@@ -148,6 +148,7 @@ def _translate_context_to_english(text: str) -> str:
     """한글이 포함된 world_context를 영어로 변환한다.
 
     이미 영어면 그대로 반환. 한글 키워드가 있으면 매핑으로 치환.
+    매핑에 없는 한글은 그대로 유지 (빈 문자열보다 나음).
     """
     if not text:
         return ""
@@ -158,9 +159,7 @@ def _translate_context_to_english(text: str) -> str:
     result = text
     for ko, en in _KO_EN_CONTEXT.items():
         result = result.replace(ko, en)
-    # 치환 후에도 한글이 남아 있으면 제거 (Hailuo 호환)
-    result = "".join(ch for ch in result if ord(ch) < 0x1100 or ord(ch) > 0xD7A3)
-    return result.strip() or ""
+    return result.strip() or text
 
 
 def _extract_scene_context(image_prompt: str | None) -> str:
@@ -262,13 +261,13 @@ def build_hailuo_prompt(
     total_scenes: int = 1,
     duration: int = 5,
 ) -> dict:
-    """Hailuo I2V 최적화 프롬프트 v3
+    """Hailuo I2V 최적화 프롬프트 v4
 
-    v2 → v3 변경:
-    - imagePrompt에서 배경/장소 컨텍스트 추출하여 항상 포함
-    - enrichedIdea의 background/mood 반영
-    - world_context 한글 → 영어 자동 변환
-    - motionPrompt + 장면 컨텍스트 결합 (콘티 이미지와 일관성 유지)
+    v3 → v4 변경:
+    - imagePrompt를 배경 컨텍스트로 직접 사용 (키워드 매칭 제거)
+    - motionPrompt fallback에서 imagePrompt 제거 (배경과 중복 방지)
+    - anti-text 지시 추가 (Hailuo가 영어를 시각적으로 렌더링하는 것 방지)
+    - enrichedIdea/world_context는 imagePrompt 없을 때만 폴백
     """
     scene_type = detect_scene_type(scene_content, image_prompt)
     motion_enhancer = MOTION_ENHANCERS.get(scene_type, MOTION_ENHANCERS["default"])
@@ -284,11 +283,10 @@ def build_hailuo_prompt(
         camera = _CAMERA_BY_POSITION["middle"]
     parts.append(camera)
 
-    # 2. 장면 배경/장소 (콘티 이미지와 일관성 유지 — 핵심 개선)
-    #    우선순위: imagePrompt 배경 > enrichedIdea.background > world_context
-    scene_context = _extract_scene_context(image_prompt)
-    if scene_context:
-        parts.append(f"In {scene_context}.")
+    # 2. 장면 배경/장소 — imagePrompt를 직접 사용 (이미 영어, 30단어 이내)
+    #    imagePrompt가 없을 때만 enrichedIdea/world_context 폴백
+    if image_prompt:
+        parts.append(f"Scene setting: {image_prompt}.")
     elif enriched_background:
         bg_en = _translate_context_to_english(enriched_background)
         if bg_en:
@@ -308,20 +306,19 @@ def build_hailuo_prompt(
     if lighting:
         parts.append(f"{lighting}.")
 
-    # 4. 동작 (motionPrompt 우선, imagePrompt fallback)
+    # 4. 동작 (motionPrompt만 사용 — imagePrompt는 배경에서 이미 사용)
     if motion_prompt:
         parts.append(motion_prompt)
-    elif image_prompt:
-        parts.append(image_prompt)
 
     # 5. 동작 보강 (자연스러운 움직임)
     parts.append(motion_enhancer)
 
-    # 6. 캐릭터 보존 + 품질 (반드시 마지막 — 모델이 뒤쪽 지시를 더 잘 따름)
+    # 6. 캐릭터 보존 + 품질 + anti-text (반드시 마지막)
     parts.append(
         "Maintain exact character colors, proportions, and design "
         "from reference image throughout the entire clip. "
-        "Smooth fluid animation."
+        "Smooth fluid animation. "
+        "NO text, words, letters, signs, or writing visible in the video."
     )
 
     # 자연스러운 문장형 조합
@@ -333,13 +330,13 @@ def build_hailuo_prompt(
         prompt = " ".join(words[:90])
 
     logger.info(
-        "Hailuo 프롬프트 v3: scene=%d, type=%s, words=%d, "
-        "has_motion=%s, has_scene_ctx=%s, has_enriched=%s",
+        "Hailuo 프롬프트 v4: scene=%d, type=%s, words=%d, "
+        "has_motion=%s, has_image_prompt=%s, has_enriched=%s",
         scene_order,
         scene_type,
         len(prompt.split()),
         bool(motion_prompt),
-        bool(scene_context),
+        bool(image_prompt),
         bool(enriched_background or enriched_mood),
     )
 

@@ -94,7 +94,11 @@ NEVER use character names, series names, or franchise names. \
 IMPORTANT: Always describe clear, simple poses where hands and limbs \
 are fully visible and not overlapping. Avoid complex hand gestures. \
 Prefer poses like: arms at sides, hands on table, hands behind back, \
-arms crossed. Keep hands away from face.
+arms crossed. Keep hands away from face. \
+IMPORTANT: Be precise about spatial relationships. \
+Use "seated in a chair at a desk" NOT "sitting at a table". \
+Use "standing next to" NOT "on". \
+Always clarify whether the character is ON or NEXT TO furniture.
 - motionPrompt: English, max 30 words. Describe ONLY the motion/action \
 that should happen in this scene. Do NOT repeat what's visible in \
 the image. Be SPECIFIC and PHYSICAL: describe exact body part movements, \
@@ -121,9 +125,14 @@ burning at the tip of its tail, blue eyes, cream-colored belly". \
 For 리자몽 → "large orange dragon with wings, flame on tail tip". \
 Also include this secondary character in imagePrompt scenes \
 where they appear.
-- narration: Korean TTS narration text. REQUIRED for every scene, never null. \
-Write 1-2 sentences describing or narrating what happens in the scene. \
-Use engaging, expressive tone suitable for short-form video narration.
+- narration: Korean subtitle for 2025 short-form video. REQUIRED, never null. \
+MAX 20 characters. Casual, punchy, trendy tone. \
+MUST reflect what's actually happening in THIS specific scene. \
+Good: "상사한테 또 걸렸다ㅋㅋ", "아니 이게 왜 내 잘못임?", "살려주세요..". \
+Bad: "헐 대박" (too generic), "피카츄는 해변에서 놀고 있습니다" (narrator style). \
+NEVER copy the examples — write unique text matching the scene context. \
+NEVER use formal "~합니다/~입니다" style. \
+If narrationStyle is "character", write as the character's inner voice or dialogue.
 - narrationStyle: "character"|"narrator" (always pick one, never "none")
 - bgmMood: overall BGM mood (first scene only): \
 epic/funny/calm/tense/sad/upbeat/mysterious
@@ -364,13 +373,14 @@ async def generate_scene_image(
             scene_only_prompt = scene_only_prompt[len(character_desc):].lstrip(". ")
 
         full_prompt = (
-            f"Same character and same background setting from reference image. "
-            f"Keep the same art style, color palette, and indoor/outdoor location. "
-            f"No lightning effects, no weather effects inside the room. "
             f"{scene_only_prompt}. "
             f"{bg_text}"
+            f"Same character appearance and same indoor/outdoor setting type "
+            f"as reference image. Keep art style and color palette consistent. "
+            f"New pose and camera angle for this scene. "
             f"{style_text}. {lighting}. "
             f"{anatomy_guard}. "
+            "No lightning effects, no weather effects inside the room. "
             "No text or letters in the image."
         )[:2000]
     else:
