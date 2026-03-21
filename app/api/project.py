@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.deps import get_current_user
@@ -36,6 +38,8 @@ from app.services.project import (
 from app.services.project import (
     update_project as svc_update_project,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -174,17 +178,20 @@ async def confirm_enriched_idea(
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
 
     # 기존 enrichedIdea가 있으면 그 위에 부분 업데이트
-    existing = getattr(record, "enrichedIdea", None) or {}
+    _raw = getattr(record, "enrichedIdea", None)
+    existing: dict = _raw if isinstance(_raw, dict) else {}
     enriched_data = {
-        "background": req.background or existing.get("background", ""),
-        "mood": req.mood or existing.get("mood", ""),
-        "main_character": req.main_character or existing.get("main_character", ""),
+        "background": req.background if req.background is not None
+        else existing.get("background", ""),
+        "mood": req.mood if req.mood is not None else existing.get("mood", ""),
+        "main_character": req.main_character if req.main_character is not None
+        else existing.get("main_character", ""),
         "supporting_characters": (
             req.supporting_characters
             if req.supporting_characters is not None
             else existing.get("supporting_characters", [])
         ),
-        "story": req.story or existing.get("story", ""),
+        "story": req.story if req.story is not None else existing.get("story", ""),
     }
 
     # 필수 필드 검증
@@ -199,6 +206,9 @@ async def confirm_enriched_idea(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+    except Exception:
+        logger.exception("confirm_enriched_idea 처리 중 오류: project_id=%s", project_id)
+        raise HTTPException(status_code=500, detail="서버 오류가 발생했습니다") from None
 
     if not updated:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
