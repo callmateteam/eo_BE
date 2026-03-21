@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.core.database import db
+from prisma import Json
 
 logger = logging.getLogger(__name__)
 
@@ -225,9 +226,13 @@ async def update_project(
     _validate_stage_prerequisites(merged, auto_stage)
     data["currentStage"] = auto_stage
 
+    write_data = {**data}
+    if "enrichedIdea" in write_data:
+        write_data["enrichedIdea"] = Json(write_data["enrichedIdea"])
+
     updated = await db.project.update(
         where={"id": project_id},
-        data=data,
+        data=write_data,
         include=_PROJECT_INCLUDE,
     )
 
