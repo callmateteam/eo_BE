@@ -280,7 +280,7 @@ async def _generate_scene_video(
                 prompt=prompt,
                 image_url=image_url,
                 duration=int(scene.duration),
-                aspect_ratio="9:16",
+                aspect_ratio="1:1",
             )
 
             # 비용 로깅

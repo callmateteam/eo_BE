@@ -66,31 +66,69 @@ async def _download(url: str, dest: str) -> None:
 
 
 def _generate_srt(scenes: list[SceneInput]) -> str:
-    """장면별 나레이션 텍스트를 SRT 자막으로 변환"""
+    """장면별 나레이션 텍스트를 SRT 자막으로 변환
+
+    긴 자막은 10자 단위로 분할하여 시간 분배.
+    """
     srt_lines: list[str] = []
     idx = 0
     elapsed = 0.0
+    max_chars = 10  # 한 자막당 최대 글자 수
 
     for scene in scenes:
         if not scene.narration or scene.narration_style == "none":
             elapsed += scene.duration
             continue
 
-        idx += 1
-        start = elapsed
-        end = elapsed + scene.duration
+        text = scene.narration.strip()
 
-        start_ts = _seconds_to_srt_ts(start)
-        end_ts = _seconds_to_srt_ts(end)
-
-        srt_lines.append(str(idx))
-        srt_lines.append(f"{start_ts} --> {end_ts}")
-        srt_lines.append(scene.narration)
-        srt_lines.append("")
+        # 짧으면 그대로
+        if len(text) <= max_chars:
+            idx += 1
+            srt_lines.append(str(idx))
+            srt_lines.append(
+                f"{_seconds_to_srt_ts(elapsed)} --> "
+                f"{_seconds_to_srt_ts(elapsed + scene.duration)}"
+            )
+            srt_lines.append(text)
+            srt_lines.append("")
+        else:
+            # 긴 자막 → 10자 단위로 분할, 시간 균등 배분
+            chunks = _split_text(text, max_chars)
+            chunk_dur = scene.duration / len(chunks)
+            for i, chunk in enumerate(chunks):
+                idx += 1
+                c_start = elapsed + i * chunk_dur
+                c_end = elapsed + (i + 1) * chunk_dur
+                srt_lines.append(str(idx))
+                srt_lines.append(
+                    f"{_seconds_to_srt_ts(c_start)} --> "
+                    f"{_seconds_to_srt_ts(c_end)}"
+                )
+                srt_lines.append(chunk)
+                srt_lines.append("")
 
         elapsed += scene.duration
 
     return "\n".join(srt_lines)
+
+
+def _split_text(text: str, max_chars: int) -> list[str]:
+    """텍스트를 max_chars 단위로 자연스럽게 분할"""
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: list[str] = []
+    # 띄어쓰기/쉼표/마침표 기준으로 끊기
+    current = ""
+    for ch in text:
+        current += ch
+        if len(current) >= max_chars and ch in (" ", ",", ".", "!", "?", "~"):
+            chunks.append(current.strip())
+            current = ""
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks if chunks else [text]
 
 
 def _seconds_to_srt_ts(seconds: float) -> str:
@@ -216,56 +254,50 @@ async def merge_storyboard_video(
         else:
             mixed_video = tts_mixed
 
-        await notify(70, "자막 입히는 중...")
+        await notify(70, "1080x1920 프레임 합성 중...")
 
-        # 4d) 자막 번인 (나레이션이 있는 경우만)
+        # 4e) 1:1 영상을 1080x1920 프레임 가운데 배치 + 자막 하단 영역
+        # 레이아웃: 상단 420px | 가운데 1080x1080 영상 | 하단 420px (자막)
+        framed_video = os.path.join(tmpdir, "framed.mp4")
         has_subs = any(s.narration and s.narration_style != "none" for s in sorted_scenes)
+
+        # 1:1 → 1080x1920 가운데 배치 (검정 배경)
+        # 자막은 하단 420px 영역에 위치 (MarginV=100으로 하단에서 100px 위)
         if has_subs:
-            sub_cmd = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                mixed_video,
-                "-vf",
-                (
-                    f"subtitles={srt_path}"
-                    ":force_style='"
-                    "FontName=Pretendard,"
-                    "FontSize=18,"
-                    "Bold=1,"
-                    "PrimaryColour=&H00FFFFFF,"
-                    "OutlineColour=&H00000000,"
-                    "Outline=4,"
-                    "Shadow=3,"
-                    "Alignment=2,"
-                    "MarginV=80'"
-                ),
-                "-c:a",
-                "copy",
-                "-c:v",
-                "libx264",
-                "-crf", "18",
-                "-preset",
-                "medium",
-                "-movflags",
-                "+faststart",
-                output_path,
-            ]
-            await _run_ffmpeg(sub_cmd)
+            vf_filter = (
+                f"scale=1080:1080:force_original_aspect_ratio=decrease,"
+                f"pad=1080:1920:0:420:black,"
+                f"subtitles={srt_path}"
+                ":force_style='"
+                "FontName=Pretendard,"
+                "FontSize=20,"
+                "Bold=1,"
+                "PrimaryColour=&H00FFFFFF,"
+                "OutlineColour=&H00000000,"
+                "Outline=3,"
+                "Shadow=0,"
+                "Spacing=2,"
+                "Alignment=2,"
+                "MarginV=150'"
+            )
         else:
-            # 자막 없으면 faststart만 적용
-            fs_cmd = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                mixed_video,
-                "-c",
-                "copy",
-                "-movflags",
-                "+faststart",
-                output_path,
-            ]
-            await _run_ffmpeg(fs_cmd)
+            vf_filter = (
+                "scale=1080:1080:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:0:420:black"
+            )
+
+        frame_cmd = [
+            "ffmpeg", "-y",
+            "-i", mixed_video,
+            "-vf", vf_filter,
+            "-c:a", "copy",
+            "-c:v", "libx264",
+            "-crf", "18",
+            "-preset", "medium",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+        await _run_ffmpeg(frame_cmd)
 
         await notify(85, "업로드 중...")
 

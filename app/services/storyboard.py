@@ -124,15 +124,22 @@ Example: for 파이리 → "small orange bipedal lizard with a flame \
 burning at the tip of its tail, blue eyes, cream-colored belly". \
 For 리자몽 → "large orange dragon with wings, flame on tail tip". \
 Also include this secondary character in imagePrompt scenes \
-where they appear.
-- narration: Korean subtitle for 2025 short-form video. REQUIRED, never null. \
-MAX 20 characters. Casual, punchy, trendy tone. \
+where they appear. Keep secondary character poses simple: \
+arms at sides, arms crossed, hands in pockets, or hands behind back. \
+Avoid complex hand gestures for ALL characters.
+- narration: Korean subtitle for 2025-2026 short-form video. REQUIRED, never null. \
+MAX 15 characters. Use trendy Gen-Z Korean internet slang. \
 MUST reflect what's actually happening in THIS specific scene. \
-Good: "상사한테 또 걸렸다ㅋㅋ", "아니 이게 왜 내 잘못임?", "살려주세요..". \
-Bad: "헐 대박" (too generic), "피카츄는 해변에서 놀고 있습니다" (narrator style). \
+Style rules: \
+  - NEVER use "~합니다/~입니다". Use "~임", "~하는 중", "~각" instead. \
+  - Reactions: "실화냐", "킹받음", "미쳤다", "오열각", "개웃김" \
+  - Situation: "[상황]+각" (망각, 사랑각, 현피각), "[동사]+하는 중" \
+  - Editor voice: "(사실 좋아하는 중)", "결국 이렇게 됨" \
+  - Emphasis: "개~" prefix, "찐", "걍", "어케" \
+Good: "킹받는 중..", "이게 내 잘못임?", "망각 시작ㅋㅋ", "걍 도망치고 싶음" \
+Bad: "헐 대박" (too generic), "피카츄는 놀고 있습니다" (formal narrator) \
 NEVER copy the examples — write unique text matching the scene context. \
-NEVER use formal "~합니다/~입니다" style. \
-If narrationStyle is "character", write as the character's inner voice or dialogue.
+If narrationStyle is "character", write as the character's inner voice.
 - narrationStyle: "character"|"narrator" (always pick one, never "none")
 - bgmMood: overall BGM mood (first scene only): \
 epic/funny/calm/tense/sad/upbeat/mysterious
@@ -291,7 +298,12 @@ async def generate_scenes_with_gpt(
         # imagePrompt에 보조 캐릭터 묘사 포함
         scene_prompt = str(s.get("imagePrompt", ""))
         if sec_desc:
-            img_prompt = f"{character_desc}. {scene_prompt}. Also in the scene: {sec_desc}"
+            img_prompt = (
+                f"{character_desc}. {scene_prompt}. "
+                f"Also in the scene: {sec_desc}. "
+                "Every character has exactly two arms, two hands with five fingers each. "
+                "No extra or missing limbs for any character."
+            )
         else:
             img_prompt = f"{character_desc}. {scene_prompt}"
 
@@ -424,7 +436,7 @@ async def _generate_with_flux_dev(prompt: str) -> bytes:
                 },
                 json={
                     "prompt": prompt,
-                    "image_size": {"width": 1024, "height": 1536},
+                    "image_size": {"width": 1024, "height": 1024},
                     "num_images": 1,
                     "num_inference_steps": 28,
                     "guidance_scale": 7.0,
@@ -470,7 +482,7 @@ async def _generate_with_flux_kontext(prompt: str, reference_image_url: str) -> 
                 json={
                     "prompt": prompt,
                     "image_url": reference_image_url,
-                    "aspect_ratio": "9:16",
+                    "aspect_ratio": "1:1",
                     "num_inference_steps": 28,
                     "guidance_scale": 4.0,
                     "num_images": 1,
