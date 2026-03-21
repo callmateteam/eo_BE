@@ -113,6 +113,93 @@ _MOOD_LIGHTING: dict[str, str] = {
     "mysterious": "moody atmospheric lighting with fog",
 }
 
+# ── 한글 → 영어 배경/분위기 매핑 (world_context 번역용) ──
+
+_KO_EN_CONTEXT: dict[str, str] = {
+    "카페": "cafe",
+    "학교": "school",
+    "교실": "classroom",
+    "공원": "park",
+    "숲": "forest",
+    "바다": "ocean",
+    "해변": "beach",
+    "도시": "city",
+    "거리": "street",
+    "방": "room",
+    "집": "house",
+    "사무실": "office",
+    "병원": "hospital",
+    "식당": "restaurant",
+    "마을": "village",
+    "성": "castle",
+    "우주": "space",
+    "동굴": "cave",
+    "산": "mountain",
+    "강": "river",
+    "호수": "lake",
+    "하늘": "sky",
+    "지하": "underground",
+    "왕국": "kingdom",
+    "세계관": "world",
+}
+
+
+def _translate_context_to_english(text: str) -> str:
+    """한글이 포함된 world_context를 영어로 변환한다.
+
+    이미 영어면 그대로 반환. 한글 키워드가 있으면 매핑으로 치환.
+    """
+    if not text:
+        return ""
+    # 이미 영어만으로 구성되면 그대로
+    has_korean = any("\uac00" <= ch <= "\ud7a3" for ch in text)
+    if not has_korean:
+        return text
+    result = text
+    for ko, en in _KO_EN_CONTEXT.items():
+        result = result.replace(ko, en)
+    # 치환 후에도 한글이 남아 있으면 제거 (Hailuo 호환)
+    result = "".join(ch for ch in result if ord(ch) < 0x1100 or ord(ch) > 0xD7A3)
+    return result.strip() or ""
+
+
+def _extract_scene_context(image_prompt: str | None) -> str:
+    """imagePrompt에서 배경/장소/분위기 키워드를 추출한다.
+
+    imagePrompt 전체를 넣으면 이미지 내용 반복이 되므로,
+    장면 설정(setting) 부분만 뽑아서 자연어 한줄로 반환.
+    """
+    if not image_prompt:
+        return ""
+    # imagePrompt의 앞부분이 보통 장소/배경 묘사
+    # "A cozy cafe interior with warm lighting, character sitting..."
+    # → "A cozy cafe interior with warm lighting" 까지만 추출
+    setting_keywords = {
+        "interior", "exterior", "indoor", "outdoor", "room", "cafe",
+        "street", "park", "forest", "beach", "ocean", "mountain",
+        "city", "village", "castle", "school", "office", "kitchen",
+        "garden", "rooftop", "bridge", "temple", "shrine", "alley",
+        "market", "shop", "store", "library", "station", "hospital",
+        "church", "palace", "cave", "lake", "river", "field",
+        "arena", "stage", "courtyard", "hallway", "bedroom",
+        "restaurant", "bar", "night", "sunset", "sunrise", "dawn",
+        "rain", "snow", "fog", "cloudy", "sunny", "moonlight",
+        "warm lighting", "dim lighting", "bright", "cozy", "dark",
+    }
+    prompt_lower = image_prompt.lower()
+    # 장소/배경 키워드가 하나라도 있으면 imagePrompt에서 배경 부분 추출
+    has_setting = any(kw in prompt_lower for kw in setting_keywords)
+    if not has_setting:
+        return ""
+    # 첫 번째 콤마 절까지가 보통 배경 묘사 (최대 2절)
+    segments = image_prompt.split(",")
+    context_parts = []
+    for seg in segments[:3]:
+        seg_lower = seg.strip().lower()
+        if any(kw in seg_lower for kw in setting_keywords):
+            context_parts.append(seg.strip())
+    return ", ".join(context_parts) if context_parts else ""
+
 
 def detect_scene_type(scene_content: str, image_prompt: str | None = None) -> str:
     """장면 내용에서 동작 유형 자동 감지"""
@@ -169,17 +256,19 @@ def build_hailuo_prompt(
     secondary_character: str = "",
     secondary_character_desc: str = "",
     bgm_mood: str | None = None,
+    enriched_background: str = "",
+    enriched_mood: str = "",
     scene_order: int = 1,
     total_scenes: int = 1,
     duration: int = 5,
 ) -> dict:
-    """Hailuo I2V 최적화 프롬프트 v2
+    """Hailuo I2V 최적화 프롬프트 v3
 
-    핵심 변경:
-    - motionPrompt 우선 사용 (이미지 내용 반복 제거)
-    - [bracket] 카메라 문법
-    - 자연스러운 문장형 프롬프트 (". " 구분 → ", " 구분)
-    - 캐릭터 일관성 강화 키워드
+    v2 → v3 변경:
+    - imagePrompt에서 배경/장소 컨텍스트 추출하여 항상 포함
+    - enrichedIdea의 background/mood 반영
+    - world_context 한글 → 영어 자동 변환
+    - motionPrompt + 장면 컨텍스트 결합 (콘티 이미지와 일관성 유지)
     """
     scene_type = detect_scene_type(scene_content, image_prompt)
     motion_enhancer = MOTION_ENHANCERS.get(scene_type, MOTION_ENHANCERS["default"])
@@ -195,20 +284,40 @@ def build_hailuo_prompt(
         camera = _CAMERA_BY_POSITION["middle"]
     parts.append(camera)
 
-    # 2. 배경/환경 (world_context가 있으면 포함)
-    if world_context:
-        parts.append(f"Scene set in {world_context}.")
+    # 2. 장면 배경/장소 (콘티 이미지와 일관성 유지 — 핵심 개선)
+    #    우선순위: imagePrompt 배경 > enrichedIdea.background > world_context
+    scene_context = _extract_scene_context(image_prompt)
+    if scene_context:
+        parts.append(f"In {scene_context}.")
+    elif enriched_background:
+        bg_en = _translate_context_to_english(enriched_background)
+        if bg_en:
+            parts.append(f"In {bg_en}.")
+    elif world_context:
+        wc_en = _translate_context_to_english(world_context)
+        if wc_en:
+            parts.append(f"Scene set in {wc_en}.")
 
-    # 3. 동작 (영어만 — motionPrompt 우선, imagePrompt fallback)
+    # 3. 분위기/조명 (enrichedIdea.mood → bgm_mood fallback → 조명 매핑)
+    lighting = ""
+    if enriched_mood:
+        mood_key = enriched_mood.lower().split(",")[0].split("/")[0].strip()
+        lighting = _MOOD_LIGHTING.get(mood_key, "")
+    if not lighting and bgm_mood:
+        lighting = _MOOD_LIGHTING.get(bgm_mood.lower(), "")
+    if lighting:
+        parts.append(f"{lighting}.")
+
+    # 4. 동작 (motionPrompt 우선, imagePrompt fallback)
     if motion_prompt:
         parts.append(motion_prompt)
     elif image_prompt:
         parts.append(image_prompt)
 
-    # 4. 동작 보강 (자연스러운 움직임)
+    # 5. 동작 보강 (자연스러운 움직임)
     parts.append(motion_enhancer)
 
-    # 5. 캐릭터 보존 + 품질 (반드시 마지막 — 모델이 뒤쪽 지시를 더 잘 따름)
+    # 6. 캐릭터 보존 + 품질 (반드시 마지막 — 모델이 뒤쪽 지시를 더 잘 따름)
     parts.append(
         "Maintain exact character colors, proportions, and design "
         "from reference image throughout the entire clip. "
@@ -224,11 +333,14 @@ def build_hailuo_prompt(
         prompt = " ".join(words[:90])
 
     logger.info(
-        "Hailuo 프롬프트 v2: scene=%d, type=%s, words=%d, has_motion=%s",
+        "Hailuo 프롬프트 v3: scene=%d, type=%s, words=%d, "
+        "has_motion=%s, has_scene_ctx=%s, has_enriched=%s",
         scene_order,
         scene_type,
         len(prompt.split()),
         bool(motion_prompt),
+        bool(scene_context),
+        bool(enriched_background or enriched_mood),
     )
 
     return {

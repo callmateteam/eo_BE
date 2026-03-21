@@ -227,7 +227,7 @@ async def _generate_scene_video(
             # 캐릭터 정보에서 시드 데이터 추출
             char_info = await _get_character_seed_data(storyboard_id)
 
-            # Hailuo 프롬프트 v2 (motionPrompt 우선, 이미지 내용 반복 제거)
+            # Hailuo 프롬프트 v3 (배경 컨텍스트 + motionPrompt + enrichedIdea)
             hailuo_result = build_hailuo_prompt(
                 scene_content=scene.content,
                 image_prompt=getattr(scene, "imagePrompt", None),
@@ -239,6 +239,8 @@ async def _generate_scene_video(
                 secondary_character=getattr(scene, "secondaryCharacter", "") or "",
                 secondary_character_desc=getattr(scene, "secondaryCharacterDesc", "") or "",
                 bgm_mood=bgm_mood,
+                enriched_background=char_info.get("enriched_background", ""),
+                enriched_mood=char_info.get("enriched_mood", ""),
                 scene_order=scene.sceneOrder,
                 total_scenes=total,
                 duration=int(scene.duration),
@@ -397,13 +399,23 @@ async def _send_progress(
 
 
 async def _get_character_seed_data(storyboard_id: str) -> dict:
-    """스토리보드의 캐릭터 시드 데이터(artStyle, extraImages, worldContext 등) 조회"""
+    """스토리보드의 캐릭터 시드 데이터 + enrichedIdea 조회"""
     sb = await db.storyboard.find_unique(
         where={"id": storyboard_id},
         include={"character": True, "customCharacter": True},
     )
     if not sb:
         return {}
+
+    # enrichedIdea: Project에서 가져오기 (storyboardId로 연결)
+    enriched_background = ""
+    enriched_mood = ""
+    project = await db.project.find_first(where={"storyboardId": storyboard_id})
+    if project and getattr(project, "enrichedIdea", None):
+        enriched = project.enrichedIdea
+        if isinstance(enriched, dict):
+            enriched_background = enriched.get("background", "") or ""
+            enriched_mood = enriched.get("mood", "") or ""
 
     if sb.character:
         c = sb.character
@@ -415,6 +427,8 @@ async def _get_character_seed_data(storyboard_id: str) -> dict:
             "world_context": getattr(c, "worldContext", "") or "",
             "series_description": getattr(c, "seriesDescription", "") or "",
             "prompt_features": c.promptFeatures,
+            "enriched_background": enriched_background,
+            "enriched_mood": enriched_mood,
         }
 
     if sb.customCharacter:
@@ -426,6 +440,8 @@ async def _get_character_seed_data(storyboard_id: str) -> dict:
             "extra_images": "",
             "world_context": "",
             "prompt_features": getattr(cc, "veoPrompt", "") or cc.description,
+            "enriched_background": enriched_background,
+            "enriched_mood": enriched_mood,
         }
 
     return {}

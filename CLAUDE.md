@@ -480,61 +480,65 @@ model VideoEditHistory {
 
 ---
 
-### 알려진 이슈: 영상이 콘티(이미지)와 불일치하는 문제
+### 영상-콘티 불일치 문제 (코드 수정 완료, 영상 테스트 미완)
 
-> **심각도**: HIGH — 이미지 콘티는 만족스럽게 나오지만, 영상(Hailuo I2V)이 콘티와 크게 다름
-> **상태**: 원인 분석 완료, 수정 필요
+> **심각도**: HIGH → **코드 수정 완료** (2026-03-21)
+> **상태**: 코드 수정 완료, 실제 영상 생성 테스트 필요 (서버 배포 후 E2E 확인)
 
-#### 증상
-- 콘티 이미지: 카페 실내, 피카츄가 테이블에 앉아 메뉴 보는 장면 → **정확히 나옴**
-- 생성된 영상: 캐릭터 변형, 배경 불일치, 콘티와 다른 동작
+#### 수정 내용 (build_hailuo_prompt v2 → v3)
+1. **imagePrompt 배경 추출**: `_extract_scene_context()`로 imagePrompt에서 배경/장소 키워드만 추출하여 프롬프트 앞부분에 삽입
+2. **world_context 영어 변환**: `_translate_context_to_english()`로 한글 자동 변환
+3. **enrichedIdea 반영**: Project.enrichedIdea의 background/mood를 영상 프롬프트에 포함
+4. **bgm_mood 조명 fallback**: enriched_mood 없을 때 bgm_mood로 조명 매핑
 
-#### 원인 분석 (Hailuo 프롬프트 vs 이미지 프롬프트 비교)
+#### 배경 우선순위
+imagePrompt 배경 > enrichedIdea.background > world_context
 
-**1. 장면 컨텍스트 누락 — Hailuo 프롬프트에 배경/장소 정보가 없음**
-```
-[이미지 프롬프트] A cozy cafe interior with warm lighting, sitting at a table with a menu.
-[Hailuo 프롬프트] [Truck right] Wide establishing shot Scene set in 포켓몬 세계관.
-                  Character shifts gaze between menu and window, ears twitching.
-```
-- 이미지 프롬프트: "cozy cafe interior, warm lighting" 명시
-- Hailuo 프롬프트: "포켓몬 세계관"만 있고 **카페/실내/조명 정보 없음**
-- `build_hailuo_prompt`가 `motionPrompt`만 사용하고 `imagePrompt`(장면 묘사)를 무시함
+#### 조명 우선순위
+enrichedIdea.mood > bgm_mood > 생략
 
-**2. world_context가 한글 — Hailuo 모델은 영어 프롬프트 최적화**
-```
-Scene set in 포켓몬 세계관  ← 한글, Hailuo가 해석 못함
-```
-- `world_context`가 DB에 한글로 저장됨 → 영어로 변환 필요
+#### 수정 파일
+- `app/services/prompt_optimizer.py` — v3 (`_extract_scene_context`, `_translate_context_to_english`, enriched 파라미터)
+- `app/services/video_generation.py` — `_get_character_seed_data()`에서 enrichedIdea 조회 추가
 
-**3. enrichedIdea 미활용 — 배경/분위기 데이터가 영상 프롬프트에 반영 안 됨**
-- 3단계에서 구체화한 배경("카페 내부, 따뜻한 조명, 비 오는 창밖")이 영상 프롬프트에 안 들어감
-- `prompt_optimizer.py`가 `enrichedIdea`를 전혀 모름
+---
 
-**4. imagePrompt 완전 무시 — motionPrompt만 사용**
-```python
-# prompt_optimizer.py L203-206
-if motion_prompt:
-    parts.append(motion_prompt)      # motionPrompt만 사용
-elif image_prompt:
-    parts.append(image_prompt)       # motionPrompt 없을 때만 fallback
-```
-- motionPrompt는 동작만 설명 ("Character shifts gaze...")
-- imagePrompt는 장면 전체 설명 ("cozy cafe interior...")
-- **motionPrompt가 있으면 imagePrompt를 완전히 버림** → 장면 컨텍스트 소실
+### 다음 할 일: BGM 프리셋 에셋 S3 업로드
 
-#### 해결 방향
-1. `build_hailuo_prompt`에서 `motionPrompt`와 `imagePrompt`를 **모두** 사용
-   - imagePrompt에서 배경/장소 키워드 추출 → 프롬프트 앞부분에 삽입
-   - motionPrompt는 동작 부분으로 유지
-2. `world_context`를 영어로 변환하여 전달
-3. `enrichedIdea.background` + `enrichedIdea.mood`를 Hailuo 프롬프트에 반영
-4. 캐릭터 외형 묘사 단어("번개", "전기")가 Hailuo 프롬프트에 들어가지 않도록 필터
+> **상태**: 코드 준비 완료, mp3 파일 없음
+> **영향**: 렌더링 시 BGM 믹싱 불가 (다운로드 실패 → BGM 없이 진행)
 
-#### 관련 파일
-- `app/services/prompt_optimizer.py` — `build_hailuo_prompt()` 수정 대상
-- `app/services/video_generation.py` — `_generate_scene_video()` enrichedIdea 전달
-- `app/services/storyboard.py` — enrichedIdea를 콘티 생성 시 저장
+S3 버킷 `eo-character-assets`의 `bgm/` 폴더에 저작권 프리 mp3 10개 필요:
+
+| 프리셋 | S3 키 |
+|--------|-------|
+| energetic | `bgm/energetic.mp3` |
+| calm | `bgm/calm.mp3` |
+| dramatic | `bgm/dramatic.mp3` |
+| happy | `bgm/happy.mp3` |
+| sad | `bgm/sad.mp3` |
+| mysterious | `bgm/mysterious.mp3` |
+| epic | `bgm/epic.mp3` |
+| romantic | `bgm/romantic.mp3` |
+| funny | `bgm/funny.mp3` |
+| horror | `bgm/horror.mp3` |
+
+추천 소스: Pixabay Music, Uppbeat, YouTube Audio Library (30~60초, 루프 가능)
+
+---
+
+### 서버 E2E 테스트 순서 (반드시 이 순서대로)
+
+> 한 번에 전체를 돌리지 말고, 단계별로 확인하며 진행할 것.
+
+1. **콘티 1~2개 생성** — 캐릭터 선택 → 아이디어 → 콘티 생성까지. 이미지가 정상적으로 나오는지 확인
+2. **영상 프롬프트 확인** — 생성된 Hailuo 프롬프트 로그에서 배경/장소/분위기가 포함됐는지 확인. 빠져있으면 `prompt_optimizer.py` 원인 분석 후 수정
+3. **영상 생성** — 1~2개 씬만 영상 생성. 콘티 이미지와 배경/분위기가 일치하는지 비교
+4. **영상 합본** — 씬별 영상이 정상이면 merge (ffmpeg concat + crossfade) 확인
+5. **BGM 믹싱** — S3에 BGM 에셋 업로드 후, 렌더링에서 BGM이 정상 믹싱되는지 확인
+6. **TTS/자막** — TTS 오버레이 + 자막 번인이 렌더링에 반영되는지 확인
+
+각 단계에서 문제가 나오면 거기서 멈추고 수정. 다음 단계는 이전 단계가 정상일 때만 진행.
 
 ---
 
