@@ -106,10 +106,31 @@ async def render_with_edits(
 
             await notify(55, "BGM 믹싱 중...")
 
-            # Step 5: BGM 믹스
+            # Step 5: BGM 시작지점 추천 + 믹스
             bgm_mixed = os.path.join(tmpdir, "bgm_mix.mp4")
             has_tts = bool(edit_data.tts_overlays)
-            await _mix_bgm(tts_mixed, edit_data.bgm, bgm_mixed, tmpdir, has_tts)
+
+            bgm_start = 0.0
+            if edit_data.bgm.preset:
+                try:
+                    from app.services.bgm_matcher import recommend_bgm_start
+
+                    scene_descs = []
+                    for se in sorted_edits:
+                        scene = scene_map.get(se.scene_id)
+                        if scene:
+                            scene_descs.append({
+                                "content": scene.content or "",
+                                "duration": (se.trim_end or scene.duration or 5.0) - se.trim_start,
+                                "narration": scene.narration,
+                            })
+                    result = await recommend_bgm_start(edit_data.bgm.preset, scene_descs)
+                    bgm_start = result.get("start_time", 0.0)
+                    logger.info("BGM 시작지점: %.1fs (%s)", bgm_start, result.get("reason", ""))
+                except Exception:
+                    logger.warning("BGM 매칭 실패, 0초부터 시작", exc_info=True)
+
+            await _mix_bgm(tts_mixed, edit_data.bgm, bgm_mixed, tmpdir, has_tts, bgm_start)
 
             await notify(65, "자막 입히는 중...")
 
@@ -444,18 +465,23 @@ async def _mix_tts_overlays(
 
 
 async def _mix_bgm(
-    input_path: str, bgm_setting, output_path: str, tmpdir: str, has_tts: bool
+    input_path: str,
+    bgm_setting,
+    output_path: str,
+    tmpdir: str,
+    has_tts: bool,
+    bgm_start_time: float = 0.0,
 ) -> None:
-    """BGM 믹스"""
+    """BGM 믹스 (에너지 프로파일 기반 시작지점 지원)"""
     bgm_url = None
     if bgm_setting.custom_url:
         bgm_url = bgm_setting.custom_url
     elif bgm_setting.preset:
+        from app.services.bgm_matcher import get_bgm_s3_url
+
         key = BGM_PRESETS.get(bgm_setting.preset.lower())
         if key:
-            bucket = settings.S3_BUCKET
-            region = settings.AWS_REGION
-            bgm_url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+            bgm_url = get_bgm_s3_url(key)
 
     if not bgm_url:
         cmd = ["ffmpeg", "-y", "-i", input_path, "-c", "copy", output_path]
@@ -472,16 +498,17 @@ async def _mix_bgm(
         return
 
     vol = bgm_setting.volume
+    fade_in = "afade=t=in:d=1.5,"
     if has_tts:
         fc = (
-            f"[1:a]volume={vol},afade=t=out:st=-3:d=3[bgm];"
+            f"[1:a]{fade_in}volume={vol},afade=t=out:st=-3:d=3[bgm];"
             f"[bgm][0:a]sidechaincompress="
             f"threshold=0.03:ratio=4:attack=1000:release=2000:knee=6:level_sc=1[ducked];"
             f"[0:a][ducked]amix=inputs=2:duration=first:normalize=0[aout]"
         )
     else:
         fc = (
-            f"[1:a]volume={vol},afade=t=out:st=-3:d=3[bgm];"
+            f"[1:a]{fade_in}volume={vol},afade=t=out:st=-3:d=3[bgm];"
             f"[0:a][bgm]amix=inputs=2:duration=first:normalize=0[aout]"
         )
 
@@ -492,6 +519,13 @@ async def _mix_bgm(
         input_path,
         "-stream_loop",
         "-1",
+    ]
+
+    # BGM 시작 지점 적용
+    if bgm_start_time > 0:
+        cmd.extend(["-ss", str(bgm_start_time)])
+
+    cmd.extend([
         "-i",
         bgm_path,
         "-filter_complex",
@@ -508,7 +542,7 @@ async def _mix_bgm(
         "192k",
         "-shortest",
         output_path,
-    ]
+    ])
     await _run_ffmpeg(cmd)
 
 

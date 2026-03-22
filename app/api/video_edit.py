@@ -47,6 +47,20 @@ _background_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
 
 
 @router.get(
+    "/bgm-presets",
+    summary="BGM 프리셋 목록 조회",
+    responses={401: {"model": ErrorResponse, "description": "인증 필요"}},
+)
+async def list_bgm_presets(
+    current_user: dict = Depends(get_current_user),
+) -> list[dict]:
+    """사용 가능한 BGM 프리셋 목록 반환"""
+    from app.services.bgm_matcher import get_all_bgm_presets
+
+    return await get_all_bgm_presets()
+
+
+@router.get(
     "/{storyboard_id}/edit",
     response_model=VideoEditResponse,
     summary="편집 상태 조회",

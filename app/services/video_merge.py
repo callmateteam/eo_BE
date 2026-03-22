@@ -17,7 +17,7 @@ from app.core.s3 import upload_video
 
 logger = logging.getLogger(__name__)
 
-# BGM 프리셋: bgmMood → S3 키 매핑
+# BGM 프리셋 폴백 (DB 조회 실패 시)
 BGM_PRESETS: dict[str, str] = {
     "energetic": "bgm/energetic.mp3",
     "calm": "bgm/calm.mp3",
@@ -33,7 +33,7 @@ BGM_PRESETS: dict[str, str] = {
 
 
 def _get_bgm_url(bgm_mood: str | None) -> str | None:
-    """bgmMood → S3 BGM URL 변환"""
+    """bgmMood → S3 BGM URL 변환 (폴백용)"""
     if not bgm_mood:
         return None
     key = BGM_PRESETS.get(bgm_mood.lower())
@@ -240,8 +240,29 @@ async def merge_storyboard_video(
         else:
             tts_mixed = concat_video
 
-        # 4d) BGM 믹스 (TTS 있으면 자동 덕킹)
+        # 4d) BGM 시작지점 추천 + 믹스 (TTS 있으면 자동 덕킹)
         if bgm_path:
+            await notify(55, "BGM 분석 중...")
+
+            bgm_start = 0.0
+            if bgm_mood:
+                try:
+                    from app.services.bgm_matcher import recommend_bgm_start
+
+                    scene_descs = [
+                        {
+                            "content": s.narration or "",
+                            "duration": s.duration,
+                            "narration": s.narration,
+                        }
+                        for s in sorted_scenes
+                    ]
+                    result = await recommend_bgm_start(bgm_mood, scene_descs)
+                    bgm_start = result.get("start_time", 0.0)
+                    logger.info("BGM 시작지점: %.1fs (%s)", bgm_start, result.get("reason", ""))
+                except Exception:
+                    logger.warning("BGM 매칭 실패, 0초부터 시작", exc_info=True)
+
             await notify(60, "BGM 믹싱 중...")
             mixed_video = os.path.join(tmpdir, "mixed.mp4")
             bgm_cmd = _build_bgm_mix_cmd(
@@ -249,6 +270,7 @@ async def merge_storyboard_video(
                 bgm_path,
                 mixed_video,
                 has_tts=bool(audio_files),
+                bgm_start_time=bgm_start,
             )
             await _run_ffmpeg(bgm_cmd)
         else:
@@ -379,44 +401,50 @@ def _build_bgm_mix_cmd(
     output_path: str,
     *,
     has_tts: bool = False,
+    bgm_start_time: float = 0.0,
+    bgm_volume: float = 0.2,
 ) -> list[str]:
     """BGM을 영상에 배경 볼륨으로 믹싱하는 FFmpeg 명령 생성
 
-    - 기본 BGM 볼륨 0.2
+    - bgm_start_time: BGM 시작 지점 (에너지 프로파일 기반 추천값)
     - TTS 있으면 sidechaincompress로 자동 덕킹
       (나레이션 신호 감지 시 BGM 볼륨 자동 감소)
-    - 영상 길이에 맞춰 BGM 자동 루프 + 페이드아웃
+    - 영상 길이에 맞춰 BGM 자동 루프 + 페이드아웃 + 페이드인
     """
+    vol = bgm_volume if has_tts else bgm_volume * 0.75
+    fade_in = "afade=t=in:d=1.5,"
+
     if has_tts:
-        # 사이드체인 덕킹: TTS 오디오가 나오면 BGM 서서히 감소/복구
-        # attack=1000ms  → TTS 시작 시 BGM이 1초에 걸쳐 천천히 줄어듦
-        # release=2000ms → TTS 끝난 후 BGM이 2초에 걸쳐 서서히 복구
-        # knee=6dB       → 압축 시작점 전후로 부드러운 곡선 적용
-        # ratio=4        → 너무 급격하지 않은 압축 비율
         fc = (
-            "[1:a]volume=0.2,afade=t=out:st=-3:d=3[bgm];"
-            "[bgm][0:a]sidechaincompress="
-            "threshold=0.03:ratio=4:"
-            "attack=1000:release=2000:"
-            "knee=6:level_sc=1[ducked];"
-            "[0:a][ducked]amix=inputs=2:"
-            "duration=first:normalize=0[aout]"
+            f"[1:a]{fade_in}volume={vol},afade=t=out:st=-3:d=3[bgm];"
+            f"[bgm][0:a]sidechaincompress="
+            f"threshold=0.03:ratio=4:"
+            f"attack=1000:release=2000:"
+            f"knee=6:level_sc=1[ducked];"
+            f"[0:a][ducked]amix=inputs=2:"
+            f"duration=first:normalize=0[aout]"
         )
     else:
-        # TTS 없으면 고정 볼륨으로 깔기
         fc = (
-            "[1:a]volume=0.15,afade=t=out:st=-3:d=3[bgm];"
-            "[0:a][bgm]amix=inputs=2:"
-            "duration=first:normalize=0[aout]"
+            f"[1:a]{fade_in}volume={vol},afade=t=out:st=-3:d=3[bgm];"
+            f"[0:a][bgm]amix=inputs=2:"
+            f"duration=first:normalize=0[aout]"
         )
 
-    return [
+    cmd = [
         "ffmpeg",
         "-y",
         "-i",
         video_path,
         "-stream_loop",
         "-1",
+    ]
+
+    # BGM 시작 지점 적용
+    if bgm_start_time > 0:
+        cmd.extend(["-ss", str(bgm_start_time)])
+
+    cmd.extend([
         "-i",
         bgm_path,
         "-filter_complex",
@@ -433,7 +461,8 @@ def _build_bgm_mix_cmd(
         "192k",
         "-shortest",
         output_path,
-    ]
+    ])
+    return cmd
 
 
 async def _get_video_duration(path: str) -> float:
