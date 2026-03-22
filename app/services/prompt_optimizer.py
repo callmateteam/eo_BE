@@ -20,32 +20,32 @@ logger = logging.getLogger(__name__)
 
 MOTION_ENHANCERS: dict[str, str] = {
     "cooking": (
-        "subtle rhythmic arm motion, gentle wrist movement, "
-        "minimal body sway, character face and body unchanged"
+        "Only arms and hands move with gentle stirring motion. "
+        "Head, face shape, body shape, colors stay FROZEN."
     ),
     "eating": (
-        "subtle hand-to-mouth movement, gentle head nod, "
-        "relaxed posture, character appearance preserved"
+        "Only hands move toward mouth, slight head nod. "
+        "Face shape, body shape, colors stay FROZEN."
     ),
     "walking": (
-        "gentle walking motion with subtle weight shift, "
-        "minimal arm swing, character design preserved"
+        "Only legs move with small steps, slight arm swing. "
+        "Face, body shape, colors stay FROZEN."
     ),
     "action": (
-        "controlled fluid motion, subtle weight transfer, "
-        "character proportions maintained throughout"
+        "Only arms move with controlled motion. "
+        "Face shape, body proportions, colors stay FROZEN."
     ),
     "sitting": (
-        "gentle breathing motion, subtle body sway, "
-        "relaxed posture, character appearance unchanged"
+        "Only slight breathing motion, tiny body sway. "
+        "Face, body shape, colors stay FROZEN."
     ),
     "talking": (
-        "subtle lip movement, gentle head tilt, "
-        "minimal hand gestures, character face preserved"
+        "Only mouth moves slightly, gentle head tilt. "
+        "Face shape, body shape, colors stay FROZEN."
     ),
     "default": (
-        "subtle natural motion, gentle movement, "
-        "character appearance preserved throughout"
+        "Only subtle natural idle motion. "
+        "Face, body shape, colors stay FROZEN."
     ),
 }
 
@@ -369,8 +369,9 @@ def build_hailuo_prompt(
 
     # 6. 캐릭터 보존 + 품질 + anti-text (반드시 마지막)
     parts.append(
-        "Maintain exact character colors, proportions, and design "
-        "from reference image throughout the entire clip. "
+        "CRITICAL: The character must look IDENTICAL to the reference image "
+        "in EVERY frame — same face shape, same body shape, same colors, "
+        "same proportions. Do NOT add, remove, or modify ANY body parts. "
         "Smooth fluid animation. "
         "NO text, words, letters, signs, or writing visible in the video."
     )

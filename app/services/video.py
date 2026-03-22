@@ -241,6 +241,7 @@ class HailuoVideoGenerator(VideoGenerator):
         body: dict = {
             "prompt": prompt,
             "prompt_optimizer": False,
+            "aspect_ratio": aspect_ratio,
         }
 
         if image_url:
