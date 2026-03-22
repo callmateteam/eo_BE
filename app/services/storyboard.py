@@ -295,17 +295,17 @@ async def generate_scenes_with_gpt(
 
         # 보조 캐릭터 외형 묘사 추출
         sec_desc = str(s.get("secondaryCharacterDesc") or "")[:300]
-        # imagePrompt에 보조 캐릭터 묘사 포함
+        # imagePrompt는 씬 설명만 저장 (character_desc는 이미지 생성 시점에 합성)
         scene_prompt = str(s.get("imagePrompt", ""))
         if sec_desc:
             img_prompt = (
-                f"{character_desc}. {scene_prompt}. "
+                f"{scene_prompt}. "
                 f"Also in the scene: {sec_desc}. "
                 "Every character has exactly two arms, two hands with five fingers each. "
                 "No extra or missing limbs for any character."
             )
         else:
-            img_prompt = f"{character_desc}. {scene_prompt}"
+            img_prompt = scene_prompt
 
         validated.append(
             {
@@ -736,30 +736,18 @@ async def process_storyboard(
         await notify(45, "장면 이미지 생성 + 나레이션 동시 시작...")
 
         # 첫 장면 이미지를 먼저 생성 (히어로 프레임 + 참조용)
-        # 씬 유형에 맞는 S3 에셋을 레퍼런스로 사용 → 캐릭터 일관성 + 표정 변화
-        from app.services.prompt_optimizer import detect_scene_type, select_best_image
-
+        # 항상 캐릭터 원본 image.png를 레퍼런스로 고정 → 캐릭터 일관성 보장
         enriched_bg = enriched_idea.get("background", "") if enriched_idea else ""
 
         hero_url: str | None = None
         if db_scenes:
             first = db_scenes[0]
             try:
-                # 씬 유형에 맞는 최적 S3 에셋 선택 (eating.png, face_happy.png 등)
-                scene_type = detect_scene_type(first.content, first.imagePrompt)
-                best_ref = select_best_image(
-                    extra_images, scene_type, character_image_url or ""
-                ) if character_image_url else None
-                logger.info(
-                    "씬1 레퍼런스: scene_type=%s, ref=%s",
-                    scene_type, best_ref,
-                )
-
                 url, _ = await generate_scene_image(
                     image_prompt=first.imagePrompt,
                     character_desc=character_desc,
                     user_id=user_id,
-                    reference_image_url=best_ref,
+                    reference_image_url=character_image_url,
                     art_style=art_style,
                     world_context=world_context,
                     bgm_mood=bgm_mood,
@@ -797,24 +785,14 @@ async def process_storyboard(
         await notify(55, "첫 장면 완료, 나머지 병렬 생성 중...")
 
         # 나머지 장면 이미지 생성 (병렬, 세마포어 제한)
-        # 씬별로 최적 S3 에셋을 레퍼런스로 사용 (hero_url 체이닝 제거)
+        # 항상 캐릭터 원본 image.png 고정 레퍼런스 (hero_url 체이닝 제거)
         async def _gen_scene_image(sc: object) -> None:
             try:
-                # 씬 유형에 맞는 최적 S3 에셋 선택
-                sc_type = detect_scene_type(sc.content, sc.imagePrompt)
-                sc_ref = select_best_image(
-                    extra_images, sc_type, character_image_url or ""
-                ) if character_image_url else hero_url
-                logger.info(
-                    "씬%d 레퍼런스: scene_type=%s, ref=%s",
-                    sc.sceneOrder, sc_type, sc_ref,
-                )
-
                 url, _ = await generate_scene_image(
                     image_prompt=sc.imagePrompt,
                     character_desc=character_desc,
                     user_id=user_id,
-                    reference_image_url=sc_ref,
+                    reference_image_url=character_image_url or hero_url,
                     art_style=art_style,
                     world_context=world_context,
                     bgm_mood=bgm_mood,
