@@ -286,10 +286,15 @@ async def merge_storyboard_video(
         # 1:1 → 1080x1920 가운데 배치 (검정 배경)
         # 자막은 하단 420px 영역에 위치 (MarginV=100으로 하단에서 100px 위)
         if has_subs:
+            fonts_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "assets", "fonts",
+            )
             vf_filter = (
                 f"scale=1080:1080:force_original_aspect_ratio=decrease,"
                 f"pad=1080:1920:0:420:black,"
                 f"subtitles={srt_path}"
+                f":fontsdir={fonts_dir}"
                 ":force_style='"
                 "FontName=Pretendard,"
                 "FontSize=20,"

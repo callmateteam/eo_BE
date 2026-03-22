@@ -31,6 +31,14 @@ class SubtitleFont(str, Enum):  # noqa: UP042
     DOHYEON = "DoHyeon"
 
 
+class SubtitleAlign(str, Enum):  # noqa: UP042
+    """텍스트 정렬"""
+
+    LEFT = "left"
+    CENTER = "center"
+    RIGHT = "right"
+
+
 class SubtitlePosition(str, Enum):  # noqa: UP042
     """자막 위치 프리셋"""
 
@@ -114,7 +122,12 @@ class SubtitleStyle(BaseModel):
     font_size: int = Field(default=36, ge=12, le=72)
     color: str = Field(default="#FFFFFF", description="글자 색상 (hex)")
     bold: bool = Field(default=True, description="볼드체")
-    shadow: ShadowStyle = Field(default_factory=lambda: ShadowStyle(enabled=True, color="#000000", offset=3))
+    italic: bool = Field(default=False, description="기울기")
+    underline: bool = Field(default=False, description="밑줄")
+    align: SubtitleAlign = Field(default=SubtitleAlign.CENTER, description="텍스트 정렬")
+    shadow: ShadowStyle = Field(
+        default_factory=lambda: ShadowStyle(enabled=True, color="#000000", offset=3),
+    )
     background: BackgroundStyle = Field(default_factory=lambda: BackgroundStyle(enabled=False))
     outline_color: str = Field(default="#000000", description="외곽선 색상")
     outline_size: int = Field(default=4, ge=0, le=8, description="외곽선 두께")

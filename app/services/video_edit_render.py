@@ -572,6 +572,8 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
         outline_size = getattr(s, 'outline_size', 4)
         shadow_depth = s.shadow.offset if s.shadow.enabled else 0
         is_bold = 1 if getattr(s, 'bold', True) else 0
+        is_italic = 1 if getattr(s, 'italic', False) else 0
+        is_underline = 1 if getattr(s, 'underline', False) else 0
 
         # 배경
         if s.background.enabled:
@@ -582,8 +584,11 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
             back_color = "&H00000000"
             border_style = 1
 
-        # 위치 → alignment
-        alignment = _position_to_alignment(s.position)
+        # 위치 + 정렬 → alignment
+        text_align = getattr(s, 'align', 'center')
+        if hasattr(text_align, 'value'):
+            text_align = text_align.value
+        alignment = _position_to_alignment(s.position, text_align)
 
         # margin (bottom 기준 — 높을수록 위로 올라감)
         margin_v = 180
@@ -595,7 +600,8 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
         styles.append(
             f"Style: {style_name},{s.font.value},{font_size},"
             f"{primary},&H000000FF,{outline_color},{back_color},"
-            f"{is_bold},0,0,0,100,100,0,0,{border_style},{outline_size},{shadow_depth},{alignment},"
+            f"{is_bold},{is_italic},{is_underline},0,100,100,0,0,"
+            f"{border_style},{outline_size},{shadow_depth},{alignment},"
             f"20,20,{margin_v},1"
         )
 
@@ -634,9 +640,16 @@ def _hex_to_ass_color(hex_color: str) -> str:
     return "&H00FFFFFF"
 
 
-def _position_to_alignment(position: str) -> int:
-    """위치 → ASS alignment (numpad 기준)"""
-    return {"top": 8, "center": 5, "bottom": 2}.get(position, 2)
+def _position_to_alignment(position: str, align: str = "center") -> int:
+    """위치 + 정렬 → ASS alignment (numpad 기준)
+
+    ASS alignment: 1=bottom-left, 2=bottom-center, 3=bottom-right
+                   4=mid-left, 5=mid-center, 6=mid-right
+                   7=top-left, 8=top-center, 9=top-right
+    """
+    base = {"bottom": 1, "center": 4, "top": 7}.get(position, 1)
+    offset = {"left": 0, "center": 1, "right": 2}.get(align, 1)
+    return base + offset
 
 
 def _seconds_to_ass_ts(seconds: float) -> str:
@@ -680,15 +693,24 @@ def _get_animation_tag(animation: SubtitleAnimation, duration: float) -> str:
     return ""
 
 
+def _get_fonts_dir() -> str:
+    """폰트 디렉토리 경로 반환"""
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(base, "assets", "fonts")
+
+
 async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> None:
-    """ASS 자막 번인"""
+    """ASS 자막 번인 (커스텀 폰트 디렉토리 포함)"""
+    fonts_dir = _get_fonts_dir()
+    # fontsdir 옵션으로 커스텀 폰트 참조
+    vf = f"ass={ass_path}:fontsdir={fonts_dir}"
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
         input_path,
         "-vf",
-        f"ass={ass_path}",
+        vf,
         "-c:a",
         "copy",
         "-c:v",
