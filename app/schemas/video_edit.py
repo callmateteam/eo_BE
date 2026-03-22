@@ -39,13 +39,6 @@ class SubtitleAlign(str, Enum):  # noqa: UP042
     RIGHT = "right"
 
 
-class SubtitlePosition(str, Enum):  # noqa: UP042
-    """자막 위치 프리셋"""
-
-    TOP = "top"
-    CENTER = "center"
-    BOTTOM = "bottom"
-
 
 class SubtitleAnimation(str, Enum):  # noqa: UP042
     """자막 애니메이션"""
@@ -131,8 +124,6 @@ class SubtitleStyle(BaseModel):
     background: BackgroundStyle = Field(default_factory=lambda: BackgroundStyle(enabled=False))
     outline_color: str = Field(default="#000000", description="외곽선 색상")
     outline_size: int = Field(default=4, ge=0, le=8, description="외곽선 두께")
-    position: SubtitlePosition = SubtitlePosition.BOTTOM
-    position_y: int | None = Field(default=None, ge=0, le=100, description="자유 배치 Y (0~100%)")
     animation: SubtitleAnimation = SubtitleAnimation.POPUP
     per_char_sizes: list[int] | None = Field(default=None, description="글자별 사이즈 배열")
 

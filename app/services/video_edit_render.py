@@ -20,6 +20,35 @@ from app.services.video_merge import BGM_PRESETS, _run_ffmpeg
 logger = logging.getLogger(__name__)
 
 
+async def _has_audio_stream(path: str) -> bool:
+    """ffprobe로 오디오 스트림 존재 여부 확인"""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "a",
+        "-show_entries", "stream=index", "-of", "csv=p=0", path,
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out, _ = await proc.communicate()
+    return bool(out.strip())
+
+
+async def _ensure_audio_stream(input_path: str, output_path: str) -> None:
+    """오디오 스트림이 없으면 무음 오디오 트랙 추가"""
+    if await _has_audio_stream(input_path):
+        if input_path != output_path:
+            cmd = ["ffmpeg", "-y", "-i", input_path, "-c", "copy", output_path]
+            await _run_ffmpeg(cmd)
+        return
+
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-c:v", "copy", "-c:a", "aac", "-shortest", output_path,
+    ]
+    await _run_ffmpeg(cmd)
+
+
 async def render_with_edits(
     storyboard_id: str,
     user_id: str,
@@ -91,6 +120,11 @@ async def render_with_edits(
             transitions = [se.transition for se in sorted_edits[: len(processed_files)]]
             concat_path = os.path.join(tmpdir, "concat.mp4")
             await _concat_with_transitions(processed_files, transitions, concat_path)
+
+            # concat 후 오디오 스트림이 없으면 무음 트랙 추가
+            concat_with_audio = os.path.join(tmpdir, "concat_audio.mp4")
+            await _ensure_audio_stream(concat_path, concat_with_audio)
+            concat_path = concat_with_audio
 
             await notify(35, "오디오 조절 중...")
 
@@ -320,6 +354,23 @@ async def _concat_with_transitions(files: list[str], transitions: list, output_p
             duration = await _get_duration(current)
             offset = max(0, duration - transition_duration)
 
+            # 오디오 스트림 존재 확인
+            has_audio_0 = await _has_audio_stream(current)
+            has_audio_1 = await _has_audio_stream(files[i])
+
+            if has_audio_0 and has_audio_1:
+                filter_str = (
+                    f"[0:v][1:v]xfade=transition={xfade_type}:duration={transition_duration}:offset={offset}[v];"
+                    f"[0:a][1:a]acrossfade=d={transition_duration}[a]"
+                )
+                map_args = ["-map", "[v]", "-map", "[a]"]
+            else:
+                # 오디오 없는 씬이 있으면 비디오만 xfade
+                filter_str = (
+                    f"[0:v][1:v]xfade=transition={xfade_type}:duration={transition_duration}:offset={offset}[v]"
+                )
+                map_args = ["-map", "[v]", "-an"]
+
             cmd = [
                 "ffmpeg",
                 "-y",
@@ -328,12 +379,8 @@ async def _concat_with_transitions(files: list[str], transitions: list, output_p
                 "-i",
                 files[i],
                 "-filter_complex",
-                f"[0:v][1:v]xfade=transition={xfade_type}:duration={transition_duration}:offset={offset}[v];"
-                f"[0:a][1:a]acrossfade=d={transition_duration}[a]",
-                "-map",
-                "[v]",
-                "-map",
-                "[a]",
+                filter_str,
+                *map_args,
                 "-c:v",
                 "libx264",
                 "-crf", "18",
@@ -584,16 +631,14 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
             back_color = "&H00000000"
             border_style = 1
 
-        # 위치 + 정렬 → alignment
+        # 정렬 (항상 하단 고정)
         text_align = getattr(s, 'align', 'center')
         if hasattr(text_align, 'value'):
             text_align = text_align.value
-        alignment = _position_to_alignment(s.position, text_align)
+        align_offset = {"left": 0, "center": 1, "right": 2}.get(text_align, 1)
+        alignment = 1 + align_offset  # bottom 기준 (1=left, 2=center, 3=right)
 
-        # margin (bottom 기준 — 높을수록 위로 올라감)
         margin_v = 180
-        if s.position_y is not None:
-            margin_v = int(1920 * (100 - s.position_y) / 100)
 
         font_size = s.font_size * 2  # PlayRes 1080x1920 기준 스케일
 
@@ -639,17 +684,6 @@ def _hex_to_ass_color(hex_color: str) -> str:
         return f"&H00{b}{g}{r}"
     return "&H00FFFFFF"
 
-
-def _position_to_alignment(position: str, align: str = "center") -> int:
-    """위치 + 정렬 → ASS alignment (numpad 기준)
-
-    ASS alignment: 1=bottom-left, 2=bottom-center, 3=bottom-right
-                   4=mid-left, 5=mid-center, 6=mid-right
-                   7=top-left, 8=top-center, 9=top-right
-    """
-    base = {"bottom": 1, "center": 4, "top": 7}.get(position, 1)
-    offset = {"left": 0, "center": 1, "right": 2}.get(align, 1)
-    return base + offset
 
 
 def _seconds_to_ass_ts(seconds: float) -> str:

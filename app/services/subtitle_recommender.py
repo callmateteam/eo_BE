@@ -16,7 +16,6 @@ from app.schemas.video_edit import (
     ShadowStyle,
     SubtitleAnimation,
     SubtitleFont,
-    SubtitlePosition,
     SubtitleStyle,
 )
 
@@ -38,7 +37,6 @@ Available options:
 - font_size: 28-48 (bigger=more impact, smaller=more subtle)
 - outline_size: 2-6 (thicker=more visible)
 - outline_color: hex (usually dark for contrast)
-- position: "bottom" (default), "center" (dramatic), "top" (thoughts)
 - bold: true/false
 
 Style guidelines:
@@ -47,8 +45,8 @@ Style guidelines:
 - Funny/casual scenes → bounce/popup, DoHyeon, playful colors (#FFFF00, #FF69B4)
 - Calm/narrative scenes → slide_up/fadein, Pretendard, white
 - Dramatic reveals → glow/typing, GmarketSans, gold (#FFD700)
-- Inner thoughts → fadein, top position, slightly transparent
-- Short exclamations → popup with big font, center position
+- Inner thoughts → fadein, slightly transparent
+- Short exclamations → popup with big font
 
 Also generate short, trendy subtitle TEXT for each scene.
 - Subtitle text is NOT the same as narration.
@@ -61,7 +59,7 @@ Also generate short, trendy subtitle TEXT for each scene.
 
 Output ONLY a JSON array matching the number of scenes. Each element:
 {"font":"...","animation":"...","color":"#...","font_size":36,\
-"outline_size":4,"outline_color":"#000000","position":"bottom","bold":true,\
+"outline_size":4,"outline_color":"#000000","bold":true,\
 "text":"짧은 자막 텍스트"}"""
 
 
@@ -189,15 +187,8 @@ def _parse_recommendation(rec: dict) -> SubtitleStyle:
         "none": SubtitleAnimation.NONE,
     }
 
-    pos_map = {
-        "bottom": SubtitlePosition.BOTTOM,
-        "center": SubtitlePosition.CENTER,
-        "top": SubtitlePosition.TOP,
-    }
-
     font = font_map.get(rec.get("font", ""), SubtitleFont.PRETENDARD)
     animation = anim_map.get(rec.get("animation", ""), SubtitleAnimation.POPUP)
-    position = pos_map.get(rec.get("position", ""), SubtitlePosition.BOTTOM)
     color = rec.get("color", "#FFFFFF")
     font_size = max(12, min(72, int(rec.get("font_size", 36))))
     outline_size = max(0, min(8, int(rec.get("outline_size", 4))))
@@ -213,7 +204,6 @@ def _parse_recommendation(rec: dict) -> SubtitleStyle:
         background=BackgroundStyle(enabled=False),
         outline_color=outline_color,
         outline_size=outline_size,
-        position=position,
         animation=animation,
     )
 
@@ -229,6 +219,5 @@ def _default_style() -> SubtitleStyle:
         background=BackgroundStyle(enabled=False),
         outline_color="#000000",
         outline_size=4,
-        position=SubtitlePosition.BOTTOM,
         animation=SubtitleAnimation.POPUP,
     )

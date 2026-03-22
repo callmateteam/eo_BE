@@ -17,6 +17,35 @@ from app.core.s3 import upload_video
 
 logger = logging.getLogger(__name__)
 
+
+async def _has_audio_stream(path: str) -> bool:
+    """ffprobe로 오디오 스트림 존재 여부 확인"""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "a",
+        "-show_entries", "stream=index", "-of", "csv=p=0", path,
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out, _ = await proc.communicate()
+    return bool(out.strip())
+
+
+async def _ensure_audio_stream(input_path: str, output_path: str) -> None:
+    """오디오 스트림이 없으면 무음 오디오 트랙 추가"""
+    if await _has_audio_stream(input_path):
+        if input_path != output_path:
+            cmd = ["ffmpeg", "-y", "-i", input_path, "-c", "copy", output_path]
+            await _run_ffmpeg(cmd)
+        return
+
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-c:v", "copy", "-c:a", "aac", "-shortest", output_path,
+    ]
+    await _run_ffmpeg(cmd)
+
 # BGM 프리셋 폴백 (DB 조회 실패 시)
 BGM_PRESETS: dict[str, str] = {
     "energetic": "bgm/energetic.mp3",
@@ -240,7 +269,12 @@ async def merge_storyboard_video(
         else:
             tts_mixed = concat_video
 
-        # 4d) BGM 시작지점 추천 + 믹스 (TTS 있으면 자동 덕킹)
+        # 4d) BGM 믹싱 전 오디오 스트림 보장 (없으면 무음 추가)
+        tts_with_audio = os.path.join(tmpdir, "tts_audio.mp4")
+        await _ensure_audio_stream(tts_mixed, tts_with_audio)
+        tts_mixed = tts_with_audio
+
+        # 4e) BGM 시작지점 추천 + 믹스 (TTS 있으면 자동 덕킹)
         if bgm_path:
             await notify(55, "BGM 분석 중...")
 
@@ -374,9 +408,15 @@ def _build_audio_mix_cmd(
         filters.append(f"[{ffmpeg_idx}:a]adelay={delay_ms}|{delay_ms}[{label}]")
         mix_inputs.append(f"[{label}]")
 
-    # 원본 비디오 오디오 (있으면) + TTS 믹스
-    n = len(mix_inputs)
-    mix_str = "".join(mix_inputs)
+    # 원본 비디오 오디오 + TTS 믹스
+    if not mix_inputs:
+        # TTS 없으면 원본 오디오만 패스스루
+        filter_complex = ""
+        cmd.extend(["-c", "copy", output_path])
+        return cmd
+
+    n = len(mix_inputs) + 1  # +1 for original audio [0:a]
+    mix_str = "[0:a]" + "".join(mix_inputs)
     filters.append(f"{mix_str}amix=inputs={n}:normalize=0[aout]")
 
     filter_complex = ";".join(filters)
