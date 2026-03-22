@@ -176,7 +176,8 @@ async def render_with_edits(
             if edit_data.subtitles:
                 await _burn_subtitles(bgm_mixed, sub_path, final_path)
             else:
-                await _faststart(bgm_mixed, final_path)
+                # 자막 없어도 1:1 → 1080x1920 프레이밍 적용
+                await _frame_to_shortform(bgm_mixed, final_path)
 
             await notify(80, "업로드 중...")
 
@@ -734,10 +735,17 @@ def _get_fonts_dir() -> str:
 
 
 async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> None:
-    """ASS 자막 번인 (커스텀 폰트 디렉토리 포함)"""
+    """ASS 자막 번인 (1:1 → 1080x1920 프레임 변환 + 커스텀 폰트)
+
+    레이아웃: 상단 420px 검정 | 가운데 1080x1080 영상 | 하단 420px 검정 (자막)
+    """
     fonts_dir = _get_fonts_dir()
-    # fontsdir 옵션으로 커스텀 폰트 참조
-    vf = f"ass={ass_path}:fontsdir={fonts_dir}"
+    # 1:1 영상을 1080x1920 프레임 가운데 배치 후 ASS 자막 번인
+    vf = (
+        f"scale=1080:1080:force_original_aspect_ratio=decrease,"
+        f"pad=1080:1920:0:420:black,"
+        f"ass={ass_path}:fontsdir={fonts_dir}"
+    )
     cmd = [
         "ffmpeg",
         "-y",
@@ -754,6 +762,23 @@ async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> N
         "medium",
         "-movflags",
         "+faststart",
+        output_path,
+    ]
+    await _run_ffmpeg(cmd)
+
+
+async def _frame_to_shortform(input_path: str, output_path: str) -> None:
+    """1:1 영상을 1080x1920 숏폼 프레임으로 변환 (자막 없는 경우)"""
+    vf = "scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1920:0:420:black"
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-vf", vf,
+        "-c:a", "copy",
+        "-c:v", "libx264",
+        "-crf", "18",
+        "-preset", "medium",
+        "-movflags", "+faststart",
         output_path,
     ]
     await _run_ffmpeg(cmd)

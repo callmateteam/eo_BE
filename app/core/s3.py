@@ -27,7 +27,13 @@ def upload_image(
     folder: str = "custom-characters",
 ) -> str:
     """이미지를 S3에 업로드하고 URL 반환"""
-    ext_map = {"image/png": "png", "image/webp": "webp"}
+    ext_map = {
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/jpeg": "jpg",
+        "audio/mpeg": "mp3",
+        "audio/wav": "wav",
+    }
     ext = ext_map.get(content_type, "jpg")
     key = f"{folder}/{user_id}/{uuid.uuid4().hex}.{ext}"
 

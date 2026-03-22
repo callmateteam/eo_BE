@@ -341,6 +341,7 @@ async def generate_scene_image(
     world_context: str = "",
     bgm_mood: str | None = None,
     character_name: str = "",
+    enriched_background: str = "",
 ) -> tuple[str, bytes]:
     """FLUX로 장면 시작 프레임 생성 → S3 업로드
 
@@ -348,6 +349,7 @@ async def generate_scene_image(
     - 나머지 장면 (reference 있음): FLUX Kontext (image-to-image)
     - 저작권 필터 없음 → 캐릭터 이름 그대로 사용 가능
     """
+    from app.services.prompt_optimizer import translate_context_to_english_async
 
     # 스타일
     style_text = art_style or "2D anime cel-shaded style, flat colors, bold outlines, vibrant palette"
@@ -363,10 +365,14 @@ async def generate_scene_image(
     }
     lighting = mood_lighting.get(bgm_mood or "", "natural lighting")
 
-    # 배경 컨텍스트
+    # 배경 컨텍스트 (enriched_background 우선 → world_context 폴백)
     bg_text = ""
-    if world_context:
-        bg_text = f"Background setting: {world_context.split(',')[0].strip()}. "
+    if enriched_background:
+        bg_en = await translate_context_to_english_async(enriched_background)
+        bg_text = f"Background setting: {bg_en}. "
+    elif world_context:
+        wc_en = await translate_context_to_english_async(world_context)
+        bg_text = f"Background setting: {wc_en}. "
 
     # 캐릭터 이름을 프롬프트에 포함 (FLUX는 저작권 필터 없음)
     name_text = f"{character_name}. " if character_name else ""
@@ -387,9 +393,9 @@ async def generate_scene_image(
         full_prompt = (
             f"{scene_only_prompt}. "
             f"{bg_text}"
-            f"Same character appearance and same indoor/outdoor setting type "
-            f"as reference image. Keep art style and color palette consistent. "
-            f"New pose and camera angle for this scene. "
+            f"Same character identity, body shape, and color palette as reference image. "
+            f"Match the character's pose and expression from the reference image. "
+            f"New camera angle for variety. "
             f"{style_text}. {lighting}. "
             f"{anatomy_guard}. "
             "No lightning effects, no weather effects inside the room. "
@@ -516,7 +522,7 @@ async def _generate_with_flux_kontext(prompt: str, reference_image_url: str) -> 
 
 
 class CharacterInfo:
-    """캐릭터 설명 + 음성 설정 + 원본 이미지 + 세계관/스타일 + 이름"""
+    """캐릭터 설명 + 음성 설정 + 원본 이미지 + 세계관/스타일 + 이름 + 에셋"""
 
     def __init__(
         self,
@@ -527,6 +533,7 @@ class CharacterInfo:
         world_context: str = "",
         art_style: str = "",
         name: str = "",
+        extra_images: str = "",
     ) -> None:
         self.description = description
         self.voice_id = voice_id
@@ -535,6 +542,7 @@ class CharacterInfo:
         self.world_context = world_context
         self.art_style = art_style
         self.name = name
+        self.extra_images = extra_images
 
 
 async def get_character_description(
@@ -564,6 +572,7 @@ async def get_character_info(
             world_context=getattr(char, "worldContext", "") or "",
             art_style=getattr(char, "artStyle", "") or "",
             name=char.nameEn or char.name or "",
+            extra_images=getattr(char, "extraImages", "") or "",
         )
     if custom_character_id:
         cc = await db.customcharacter.find_unique(where={"id": custom_character_id})
@@ -659,6 +668,7 @@ async def process_storyboard(
     art_style: str = "",
     character_name: str = "",
     enriched_idea: dict | None = None,
+    extra_images: str = "",
 ) -> None:
     """콘티 생성 전체 파이프라인 (백그라운드)"""
 
@@ -726,20 +736,35 @@ async def process_storyboard(
         await notify(45, "장면 이미지 생성 + 나레이션 동시 시작...")
 
         # 첫 장면 이미지를 먼저 생성 (히어로 프레임 + 참조용)
-        # 캐릭터 원본 이미지가 있으면 레퍼런스로 사용 → 캐릭터 일관성 보장
+        # 씬 유형에 맞는 S3 에셋을 레퍼런스로 사용 → 캐릭터 일관성 + 표정 변화
+        from app.services.prompt_optimizer import detect_scene_type, select_best_image
+
+        enriched_bg = enriched_idea.get("background", "") if enriched_idea else ""
+
         hero_url: str | None = None
         if db_scenes:
             first = db_scenes[0]
             try:
+                # 씬 유형에 맞는 최적 S3 에셋 선택 (eating.png, face_happy.png 등)
+                scene_type = detect_scene_type(first.content, first.imagePrompt)
+                best_ref = select_best_image(
+                    extra_images, scene_type, character_image_url or ""
+                ) if character_image_url else None
+                logger.info(
+                    "씬1 레퍼런스: scene_type=%s, ref=%s",
+                    scene_type, best_ref,
+                )
+
                 url, _ = await generate_scene_image(
                     image_prompt=first.imagePrompt,
                     character_desc=character_desc,
                     user_id=user_id,
-                    reference_image_url=character_image_url,
+                    reference_image_url=best_ref,
                     art_style=art_style,
                     world_context=world_context,
                     bgm_mood=bgm_mood,
                     character_name=character_name,
+                    enriched_background=enriched_bg,
                 )
                 hero_url = url
                 await db.storyboardscene.update(
@@ -772,17 +797,29 @@ async def process_storyboard(
         await notify(55, "첫 장면 완료, 나머지 병렬 생성 중...")
 
         # 나머지 장면 이미지 생성 (병렬, 세마포어 제한)
+        # 씬별로 최적 S3 에셋을 레퍼런스로 사용 (hero_url 체이닝 제거)
         async def _gen_scene_image(sc: object) -> None:
             try:
+                # 씬 유형에 맞는 최적 S3 에셋 선택
+                sc_type = detect_scene_type(sc.content, sc.imagePrompt)
+                sc_ref = select_best_image(
+                    extra_images, sc_type, character_image_url or ""
+                ) if character_image_url else hero_url
+                logger.info(
+                    "씬%d 레퍼런스: scene_type=%s, ref=%s",
+                    sc.sceneOrder, sc_type, sc_ref,
+                )
+
                 url, _ = await generate_scene_image(
                     image_prompt=sc.imagePrompt,
                     character_desc=character_desc,
                     user_id=user_id,
-                    reference_image_url=hero_url,
+                    reference_image_url=sc_ref,
                     art_style=art_style,
                     world_context=world_context,
                     bgm_mood=bgm_mood,
                     character_name=character_name,
+                    enriched_background=enriched_bg,
                 )
                 await db.storyboardscene.update(
                     where={"id": sc.id},

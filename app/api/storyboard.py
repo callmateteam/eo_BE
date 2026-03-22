@@ -188,6 +188,7 @@ async def create_storyboard(
             art_style=char_info.art_style,
             character_name=char_info.name,
             enriched_idea=enriched_idea,
+            extra_images=char_info.extra_images,
         )
     )
     _background_tasks.add(task)

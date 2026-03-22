@@ -145,7 +145,7 @@ _KO_EN_CONTEXT: dict[str, str] = {
 
 
 def _translate_context_to_english(text: str) -> str:
-    """한글이 포함된 world_context를 영어로 변환한다.
+    """한글이 포함된 world_context를 영어로 변환한다 (동기, 키워드 매핑만).
 
     이미 영어면 그대로 반환. 한글 키워드가 있으면 매핑으로 치환.
     매핑에 없는 한글은 그대로 유지 (빈 문자열보다 나음).
@@ -160,6 +160,60 @@ def _translate_context_to_english(text: str) -> str:
     for ko, en in _KO_EN_CONTEXT.items():
         result = result.replace(ko, en)
     return result.strip() or text
+
+
+async def translate_context_to_english_async(text: str) -> str:
+    """한글 배경/분위기를 영어로 번역 (키워드 매핑 → GPT 폴백).
+
+    키워드 매핑으로 먼저 시도하고, 한글이 남아있으면 GPT-4o-mini로 번역.
+    """
+    import asyncio
+
+    from app.core.config import settings
+    from app.core.http_client import get_openai_client
+
+    if not text:
+        return ""
+
+    # 1. 기존 키워드 매핑 시도
+    result = _translate_context_to_english(text)
+    has_korean = any("\uac00" <= ch <= "\ud7a3" for ch in result)
+    if not has_korean:
+        return result
+
+    # 2. 한글 남아있으면 GPT로 번역
+    try:
+        client = get_openai_client()
+        async with asyncio.timeout(10):
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "max_tokens": 50,
+                    "temperature": 0,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Translate the Korean scene/background description "
+                                "to English. Max 15 words. Output ONLY the translation."
+                            ),
+                        },
+                        {"role": "user", "content": text},
+                    ],
+                },
+            )
+            resp.raise_for_status()
+            translated = resp.json()["choices"][0]["message"]["content"].strip()
+            logger.info("GPT 배경 번역: %s → %s", text[:30], translated)
+            return translated
+    except Exception:
+        logger.warning("GPT 배경 번역 실패, 키워드 매핑 결과 사용: %s", result[:30])
+        return result
 
 
 def _extract_scene_context(image_prompt: str | None) -> str:

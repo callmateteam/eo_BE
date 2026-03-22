@@ -33,20 +33,19 @@ Available options:
 - animation: "popup" (energetic/surprise), "bounce" (fun/playful), \
 "glow" (dramatic/emotional), "slide_up" (calm/narrative), \
 "fadein" (gentle/serious), "typing" (suspense/reveal), "none" (neutral)
-- color: hex color for text (ensure contrast with anime backgrounds)
 - font_size: 28-48 (bigger=more impact, smaller=more subtle)
 - outline_size: 2-6 (thicker=more visible)
-- outline_color: hex (usually dark for contrast)
 - bold: true/false
 
 Style guidelines:
-- Action/exciting scenes → popup/bounce, GmarketSans, larger font, bright colors
-- Emotional/sad scenes → glow/fadein, NanumMyeongjo, softer colors (#E0E0FF)
-- Funny/casual scenes → bounce/popup, DoHyeon, playful colors (#FFFF00, #FF69B4)
-- Calm/narrative scenes → slide_up/fadein, Pretendard, white
-- Dramatic reveals → glow/typing, GmarketSans, gold (#FFD700)
-- Inner thoughts → fadein, slightly transparent
+- Action/exciting scenes → popup/bounce, GmarketSans, larger font
+- Emotional/sad scenes → glow/fadein, NanumMyeongjo
+- Funny/casual scenes → bounce/popup, DoHyeon
+- Calm/narrative scenes → slide_up/fadein, Pretendard
+- Dramatic reveals → glow/typing, GmarketSans
+- Inner thoughts → fadein
 - Short exclamations → popup with big font
+- DO NOT recommend color. Color is always white (#FFFFFF), user can change it later.
 
 Also generate short, trendy subtitle TEXT for each scene.
 - Subtitle text is NOT the same as narration.
@@ -60,7 +59,9 @@ Also generate short, trendy subtitle TEXT for each scene.
 Output ONLY a JSON array matching the number of scenes. Each element:
 {"font":"...","animation":"...","color":"#...","font_size":36,\
 "outline_size":4,"outline_color":"#000000","bold":true,\
-"text":"짧은 자막 텍스트"}"""
+"text":"짧은 자막 텍스트"}
+IMPORTANT: Do NOT include "color" or "outline_color" in your response. \
+Those are fixed to white/black and user can customize later."""
 
 
 async def recommend_subtitle_styles(
@@ -189,20 +190,19 @@ def _parse_recommendation(rec: dict) -> SubtitleStyle:
 
     font = font_map.get(rec.get("font", ""), SubtitleFont.PRETENDARD)
     animation = anim_map.get(rec.get("animation", ""), SubtitleAnimation.POPUP)
-    color = rec.get("color", "#FFFFFF")
     font_size = max(12, min(72, int(rec.get("font_size", 36))))
     outline_size = max(0, min(8, int(rec.get("outline_size", 4))))
-    outline_color = rec.get("outline_color", "#000000")
     bold = bool(rec.get("bold", True))
 
+    # 색상은 항상 흰색/검정 고정 (사용자가 편집에서 변경 가능)
     return SubtitleStyle(
         font=font,
         font_size=font_size,
-        color=color,
+        color="#FFFFFF",
         bold=bold,
         shadow=ShadowStyle(enabled=True, color="#000000", offset=3),
         background=BackgroundStyle(enabled=False),
-        outline_color=outline_color,
+        outline_color="#000000",
         outline_size=outline_size,
         animation=animation,
     )
