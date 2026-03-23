@@ -1,13 +1,13 @@
-"""Hailuo I2V 프롬프트 최적화 엔진 v4
+"""Hailuo I2V 프롬프트 최적화 엔진 v5
 
 핵심 원칙 (리서치 기반):
-1. imagePrompt를 배경 컨텍스트로 직접 사용 (키워드 매칭 제거)
-2. motionPrompt를 동작 전용으로만 사용 (imagePrompt fallback 제거)
-3. 90단어 이내, 자연스러운 문장 (목록형 금지)
+1. imagePrompt에서 배경만 간략 추출 (_extract_scene_context 사용)
+2. motionPrompt를 동작 전용으로만 사용
+3. 60단어 이내, 자연스러운 문장 (짧을수록 캐릭터 보존 우수)
 4. 자연스러운 관절/동작 키워드 필수 (로봇 동작 방지)
-5. Hailuo [bracket] 카메라 문법 사용
-6. 캐릭터 일관성 키워드 필수 삽입
-7. anti-text 지시 필수 (영어 텍스트 시각적 렌더링 방지)
+5. [Static shot] 카메라 고정 (캐릭터 보존 최우선)
+6. 리서치 검증된 고효과 캐릭터 보존 키워드 사용
+7. 부정형 지시 제거 (Hailuo에서 효과 없음, 토큰 낭비)
 """
 
 from __future__ import annotations
@@ -94,11 +94,12 @@ _ACTION_KEYWORDS: dict[str, str] = {
 }
 
 # ── 카메라 앵글 (Hailuo [bracket] 문법) ──
+# v5: 캐릭터 보존을 위해 [Static shot] 고정 (리서치: 최고 fidelity)
 
 _CAMERA_BY_POSITION = {
-    "first": "[Truck right] Wide establishing shot",
-    "middle": "[Pan left] Medium shot",
-    "last": "[Push in] Medium close-up",
+    "first": "[Static shot]",
+    "middle": "[Static shot]",
+    "last": "[Static shot]",
 }
 
 # ── 조명 매핑 ──
@@ -315,32 +316,32 @@ def build_hailuo_prompt(
     total_scenes: int = 1,
     duration: int = 5,
 ) -> dict:
-    """Hailuo I2V 최적화 프롬프트 v4
+    """Hailuo I2V 최적화 프롬프트 v5
 
-    v3 → v4 변경:
-    - imagePrompt를 배경 컨텍스트로 직접 사용 (키워드 매칭 제거)
-    - motionPrompt fallback에서 imagePrompt 제거 (배경과 중복 방지)
-    - anti-text 지시 추가 (Hailuo가 영어를 시각적으로 렌더링하는 것 방지)
-    - enrichedIdea/world_context는 imagePrompt 없을 때만 폴백
+    v4 → v5 변경 (리서치 기반):
+    - 카메라: 모든 씬 [Static shot] 고정 (캐릭터 보존 최우선)
+    - 캐릭터 보존: "CRITICAL:..." → 리서치 고효과 키워드로 교체
+    - 배경: imagePrompt 전체 삽입 → _extract_scene_context()로 1~2절만
+    - 부정형 제거: "Do NOT...", "NO text..." 삭제 (Hailuo에서 효과 없음)
+    - 단어 제한: 90 → 60 (짧을수록 캐릭터 보존 우수)
     """
     scene_type = detect_scene_type(scene_content, image_prompt)
     motion_enhancer = MOTION_ENHANCERS.get(scene_type, MOTION_ENHANCERS["default"])
 
     parts: list[str] = []
 
-    # 1. 카메라 (Hailuo [bracket] 문법 — 반드시 맨 앞)
-    if scene_order == 1:
-        camera = _CAMERA_BY_POSITION["first"]
-    elif scene_order == total_scenes:
-        camera = _CAMERA_BY_POSITION["last"]
-    else:
-        camera = _CAMERA_BY_POSITION["middle"]
-    parts.append(camera)
+    # 1. 카메라 ([Static shot] 고정 — 캐릭터 보존 최우선)
+    parts.append("[Static shot]")
 
-    # 2. 장면 배경/장소 — imagePrompt를 직접 사용 (이미 영어, 30단어 이내)
-    #    imagePrompt가 없을 때만 enrichedIdea/world_context 폴백
-    if image_prompt:
-        parts.append(f"Scene setting: {image_prompt}.")
+    # 2. 리서치 검증된 캐릭터 보존 키워드 (고효과, 반드시 카메라 직후)
+    parts.append(
+        "Preserve exact character colors and design from reference image."
+    )
+
+    # 3. 장면 배경/장소 — _extract_scene_context로 간략 추출
+    bg_context = _extract_scene_context(image_prompt) if image_prompt else ""
+    if bg_context:
+        parts.append(f"{bg_context}.")
     elif enriched_background:
         bg_en = _translate_context_to_english(enriched_background)
         if bg_en:
@@ -348,9 +349,9 @@ def build_hailuo_prompt(
     elif world_context:
         wc_en = _translate_context_to_english(world_context)
         if wc_en:
-            parts.append(f"Scene set in {wc_en}.")
+            parts.append(f"In {wc_en}.")
 
-    # 3. 분위기/조명 (enrichedIdea.mood → bgm_mood fallback → 조명 매핑)
+    # 4. 분위기/조명 (enrichedIdea.mood → bgm_mood fallback)
     lighting = ""
     if enriched_mood:
         mood_key = enriched_mood.lower().split(",")[0].split("/")[0].strip()
@@ -360,38 +361,34 @@ def build_hailuo_prompt(
     if lighting:
         parts.append(f"{lighting}.")
 
-    # 4. 동작 (motionPrompt만 사용 — imagePrompt는 배경에서 이미 사용)
+    # 5. 동작 (motionPrompt만 사용)
     if motion_prompt:
         parts.append(motion_prompt)
 
-    # 5. 동작 보강 (자연스러운 움직임)
+    # 6. 동작 보강 (자연스러운 움직임 + FROZEN 키워드)
     parts.append(motion_enhancer)
 
-    # 6. 캐릭터 보존 + 품질 + anti-text (반드시 마지막)
+    # 7. 품질 마무리 (리서치 고효과 키워드)
     parts.append(
-        "CRITICAL: The character must look IDENTICAL to the reference image "
-        "in EVERY frame — same face shape, same body shape, same colors, "
-        "same proportions. Do NOT add, remove, or modify ANY body parts. "
-        "Smooth fluid animation. "
-        "NO text, words, letters, signs, or writing visible in the video."
+        "Smooth fluid animation, consistent character appearance."
     )
 
     # 자연스러운 문장형 조합
     prompt = " ".join(p for p in parts if p)
 
-    # 90단어 제한 (짧을수록 캐릭터 보존 우수)
+    # 60단어 제한 (짧을수록 캐릭터 보존 우수 — v4 90 → v5 60)
     words = prompt.split()
-    if len(words) > 90:
-        prompt = " ".join(words[:90])
+    if len(words) > 60:
+        prompt = " ".join(words[:60])
 
     logger.info(
-        "Hailuo 프롬프트 v4: scene=%d, type=%s, words=%d, "
-        "has_motion=%s, has_image_prompt=%s, has_enriched=%s",
+        "Hailuo 프롬프트 v5: scene=%d, type=%s, words=%d, "
+        "has_motion=%s, bg_context='%s', has_enriched=%s",
         scene_order,
         scene_type,
         len(prompt.split()),
         bool(motion_prompt),
-        bool(image_prompt),
+        bg_context[:50] if bg_context else "",
         bool(enriched_background or enriched_mood),
     )
 

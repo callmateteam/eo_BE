@@ -252,6 +252,13 @@ class HailuoVideoGenerator(VideoGenerator):
             body["duration"] = min(duration, 6)
             body["resolution"] = "768P"
 
+        logger.info(
+            "[디버그] Hailuo API 요청: model=%s, aspect_ratio=%s, "
+            "prompt_optimizer=%s, has_image=%s, prompt_words=%d",
+            self._model, body.get("aspect_ratio"), body.get("prompt_optimizer"),
+            bool(body.get("image_url")), len(body.get("prompt", "").split()),
+        )
+
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(self._base, json=body, headers=headers)
             if resp.status_code != 200:
@@ -311,7 +318,24 @@ class HailuoVideoGenerator(VideoGenerator):
                             f"Hailuo 결과 조회 실패 ({result_resp.status_code}): {body_text}"
                         )
                     result = result_resp.json()
+
+                    # ── 디버그 로깅: Hailuo 응답 전체 구조 ──
                     video = result.get("video", {})
+                    logger.info(
+                        "[디버그] Hailuo 응답 키: %s, video 키: %s",
+                        list(result.keys()),
+                        list(video.keys()) if isinstance(video, dict) else type(video),
+                    )
+                    # 해상도 정보가 응답에 포함될 경우 로깅
+                    v_width = video.get("width") or result.get("width")
+                    v_height = video.get("height") or result.get("height")
+                    v_duration = video.get("duration") or result.get("duration")
+                    logger.info(
+                        "[디버그] Hailuo 출력: width=%s, height=%s, "
+                        "duration=%s, request_id=%s",
+                        v_width, v_height, v_duration, request_id,
+                    )
+
                     url = video.get("url", "")
                     if not url:
                         raise RuntimeError(f"Hailuo 영상 URL 없음: {result}")

@@ -614,8 +614,8 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
         s = sub.style
         style_name = f"Sub{i}"
 
-        # 색상 변환 (hex → ASS &HBBGGRR)
-        primary = _hex_to_ass_color(s.color)
+        # 색상: 항상 흰색 고정 (숏폼 가독성 + 검은 배경 대비)
+        primary = _hex_to_ass_color("#FFFFFF")
         outline_color = _hex_to_ass_color(getattr(s, 'outline_color', '#000000'))
         outline_size = getattr(s, 'outline_size', 4)
         shadow_depth = s.shadow.offset if s.shadow.enabled else 0
@@ -739,6 +739,10 @@ async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> N
 
     레이아웃: 상단 420px 검정 | 가운데 1080x1080 영상 | 하단 420px 검정 (자막)
     """
+    # ── 디버그: 입력 해상도 확인 ──
+    pre_dim = await _get_video_dimensions(input_path)
+    logger.info("[디버그] 자막번인 입력: %s", pre_dim)
+
     fonts_dir = _get_fonts_dir()
     # 1:1 영상을 1080x1920 프레임 가운데 배치 후 ASS 자막 번인
     vf = (
@@ -746,6 +750,7 @@ async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> N
         f"pad=1080:1920:0:420:black,"
         f"ass={ass_path}:fontsdir={fonts_dir}"
     )
+    logger.info("[디버그] 자막번인 vf: %s", vf[:200])
     cmd = [
         "ffmpeg",
         "-y",
@@ -766,9 +771,17 @@ async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> N
     ]
     await _run_ffmpeg(cmd)
 
+    # ── 디버그: 출력 해상도 확인 ──
+    post_dim = await _get_video_dimensions(output_path)
+    logger.info("[디버그] 자막번인 출력: %s", post_dim)
+
 
 async def _frame_to_shortform(input_path: str, output_path: str) -> None:
     """1:1 영상을 1080x1920 숏폼 프레임으로 변환 (자막 없는 경우)"""
+    # ── 디버그: 입력 해상도 확인 ──
+    pre_dim = await _get_video_dimensions(input_path)
+    logger.info("[디버그] 숏폼 프레임 입력: %s", pre_dim)
+
     vf = "scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1920:0:420:black"
     cmd = [
         "ffmpeg", "-y",
@@ -782,6 +795,29 @@ async def _frame_to_shortform(input_path: str, output_path: str) -> None:
         output_path,
     ]
     await _run_ffmpeg(cmd)
+
+    # ── 디버그: 출력 해상도 확인 ──
+    post_dim = await _get_video_dimensions(output_path)
+    logger.info("[디버그] 숏폼 프레임 출력: %s", post_dim)
+
+
+async def _get_video_dimensions(path: str) -> str:
+    """ffprobe로 영상 해상도 조회 → 'WxH' 문자열 반환"""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=s=x:p=0",
+        path,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        return stdout.decode().strip() or "unknown"
+    except Exception:
+        return "ffprobe-error"
 
 
 async def _faststart(input_path: str, output_path: str) -> None:

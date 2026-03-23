@@ -485,9 +485,65 @@ async def _download_and_upload(
         video_bytes = resp.content
 
     logger.info("영상 다운로드 완료: %d bytes", len(video_bytes))
+
+    # ── 디버그: 다운로드된 영상의 실제 해상도 확인 ──
+    await _log_video_dimensions(video_bytes)
+
     s3_url = await asyncio.to_thread(upload_video, video_bytes, user_id)
     logger.info("영상 S3 업로드 완료: %s", s3_url[:80] if s3_url else "None")
     return s3_url
+
+
+async def _log_video_dimensions(video_bytes: bytes) -> None:
+    """영상 바이트에서 해상도를 ffprobe로 확인하여 로깅"""
+    import tempfile
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp.write(video_bytes)
+            tmp_path = tmp.name
+
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,duration,codec_name",
+            "-of", "json",
+            tmp_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode == 0:
+            import json
+            info = json.loads(stdout.decode())
+            streams = info.get("streams", [])
+            if streams:
+                s = streams[0]
+                logger.info(
+                    "[디버그] 영상 해상도: %sx%s, codec=%s, duration=%s",
+                    s.get("width"), s.get("height"),
+                    s.get("codec_name"), s.get("duration"),
+                )
+            else:
+                logger.warning("[디버그] ffprobe 스트림 정보 없음")
+        else:
+            logger.warning(
+                "[디버그] ffprobe 실패 (code=%d): %s",
+                proc.returncode, stderr.decode()[:200],
+            )
+    except FileNotFoundError:
+        logger.warning("[디버그] ffprobe 미설치 — 영상 해상도 확인 불가")
+    except Exception:
+        logger.warning("[디버그] 영상 해상도 확인 중 오류", exc_info=True)
+    finally:
+        if tmp_path:
+            import os
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 async def _advance_project_stage(storyboard_id: str) -> None:

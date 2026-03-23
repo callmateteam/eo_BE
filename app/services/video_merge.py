@@ -312,13 +312,20 @@ async def merge_storyboard_video(
 
         await notify(70, "1080x1920 프레임 합성 중...")
 
+        # ── 디버그: 레터박스 적용 전 영상 해상도 확인 ──
+        pre_dim = await _get_video_dimensions(mixed_video)
+        logger.info(
+            "[디버그] 레터박스 적용 전: %s, file=%s",
+            pre_dim, os.path.basename(mixed_video),
+        )
+
         # 4e) 1:1 영상을 1080x1920 프레임 가운데 배치 + 자막 하단 영역
         # 레이아웃: 상단 420px | 가운데 1080x1080 영상 | 하단 420px (자막)
         framed_video = os.path.join(tmpdir, "framed.mp4")
         has_subs = any(s.narration and s.narration_style != "none" for s in sorted_scenes)
 
         # 1:1 → 1080x1920 가운데 배치 (검정 배경)
-        # 자막은 하단 420px 영역에 위치 (MarginV=100으로 하단에서 100px 위)
+        # 자막: 흰색 고정 (PrimaryColour=&H00FFFFFF), 하단 영역
         if has_subs:
             fonts_dir = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -347,6 +354,8 @@ async def merge_storyboard_video(
                 "pad=1080:1920:0:420:black"
             )
 
+        logger.info("[디버그] vf_filter: %s", vf_filter[:200])
+
         frame_cmd = [
             "ffmpeg", "-y",
             "-i", mixed_video,
@@ -359,6 +368,13 @@ async def merge_storyboard_video(
             output_path,
         ]
         await _run_ffmpeg(frame_cmd)
+
+        # ── 디버그: 레터박스 적용 후 최종 해상도 확인 ──
+        post_dim = await _get_video_dimensions(output_path)
+        logger.info(
+            "[디버그] 레터박스 적용 후: %s, file=%s",
+            post_dim, os.path.basename(output_path),
+        )
 
         await notify(85, "업로드 중...")
 
@@ -563,6 +579,25 @@ async def _concat_with_crossfade(
         current = out
 
     logger.info("Crossfade 결합 완료: %d 장면", len(files))
+
+
+async def _get_video_dimensions(path: str) -> str:
+    """ffprobe로 영상 해상도 조회 → 'WxH' 문자열 반환"""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=s=x:p=0",
+        path,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        return stdout.decode().strip() or "unknown"
+    except Exception:
+        return "ffprobe-error"
 
 
 async def _run_ffmpeg(cmd: list[str]) -> None:
