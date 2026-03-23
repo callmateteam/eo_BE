@@ -527,6 +527,75 @@ async def generate_storyboard_videos(
     return VideoGenerationStartResponse(storyboard_id=storyboard_id)
 
 
+@router.post(
+    "/{storyboard_id}/retry-failed-videos",
+    response_model=VideoGenerationStartResponse,
+    status_code=202,
+    summary="실패한 씬 영상만 재생성",
+    responses={
+        400: {"model": ErrorResponse, "description": "재시도할 실패 씬 없음"},
+        401: {"model": ErrorResponse, "description": "인증 필요"},
+        404: {"model": ErrorResponse, "description": "콘티를 찾을 수 없음"},
+    },
+)
+async def retry_failed_videos(
+    storyboard_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> VideoGenerationStartResponse:
+    """FAILED 상태인 씬만 재생성한다.
+
+    성공(COMPLETED)한 씬은 건드리지 않고, 실패한 씬만 다시 Hailuo로 생성 요청한다.
+    완료 후 합본 영상도 자동 재생성된다.
+    """
+    sb = await db.storyboard.find_unique(
+        where={"id": storyboard_id},
+        include={"scenes": True},
+    )
+    if not sb:
+        raise HTTPException(status_code=404, detail="콘티를 찾을 수 없습니다")
+    if sb.userId != current_user["id"]:
+        raise HTTPException(status_code=404, detail="콘티를 찾을 수 없습니다")
+
+    failed_scenes = [s for s in (sb.scenes or []) if s.videoStatus == "FAILED"]
+    if not failed_scenes:
+        raise HTTPException(status_code=400, detail="재시도할 실패 씬이 없습니다")
+
+    video_sub_key = f"{storyboard_id}:video"
+
+    async def video_progress_callback(msg: dict) -> None:
+        subs = _progress_subs.get(video_sub_key, set())
+        if not subs:
+            return
+        is_terminal = msg.get("status") in ("VIDEO_READY", "FAILED")
+        text = json.dumps(msg, ensure_ascii=False)
+        dead: list[WebSocket] = []
+        for ws_item in subs:
+            try:
+                await ws_item.send_text(text)
+                if is_terminal:
+                    await ws_item.close()
+            except Exception:
+                dead.append(ws_item)
+        if is_terminal:
+            _progress_subs.pop(video_sub_key, None)
+        else:
+            for ws_item in dead:
+                subs.discard(ws_item)
+
+    task = asyncio.create_task(
+        process_storyboard_videos(
+            storyboard_id=storyboard_id,
+            user_id=current_user["id"],
+            progress_callback=video_progress_callback,
+            failed_only=True,
+        )
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return VideoGenerationStartResponse(storyboard_id=storyboard_id)
+
+
 # ── WebSocket: 영상 생성 진행률 ──
 
 

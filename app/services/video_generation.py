@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable
 
@@ -32,8 +33,12 @@ async def process_storyboard_videos(
     storyboard_id: str,
     user_id: str,
     progress_callback: Callable[[dict], Awaitable[None]] | None = None,
+    failed_only: bool = False,
 ) -> None:
-    """콘티의 모든 장면에 대해 병렬로 영상 생성"""
+    """콘티의 모든 장면에 대해 병렬로 영상 생성
+
+    failed_only=True이면 FAILED 상태 씬만 재생성한다.
+    """
     try:
         # 콘티 + 장면 조회
         storyboard = await db.storyboard.find_unique(
@@ -44,8 +49,18 @@ async def process_storyboard_videos(
             logger.error("콘티를 찾을 수 없음: %s", storyboard_id)
             return
 
-        scenes = sorted(storyboard.scenes, key=lambda s: s.sceneOrder)
-        total = len(scenes)
+        all_scenes = sorted(storyboard.scenes, key=lambda s: s.sceneOrder)
+        total = len(all_scenes)
+
+        # FAILED 씬만 필터
+        if failed_only:
+            scenes = [s for s in all_scenes if s.videoStatus == "FAILED"]
+            if not scenes:
+                logger.info("재시도할 FAILED 씬 없음: %s", storyboard_id)
+                return
+            logger.info("FAILED 씬 %d개 재시도: %s", len(scenes), [s.sceneOrder for s in scenes])
+        else:
+            scenes = all_scenes
 
         # 캐릭터 설명 조회
         char_desc = await get_character_description(
@@ -58,12 +73,12 @@ async def process_storyboard_videos(
             data={"status": "VIDEO_GENERATING"},
         )
 
-        # 모든 장면 videoStatus → GENERATING
+        # 대상 장면 videoStatus → GENERATING
         now = now_kst()
         for scene in scenes:
             await db.storyboardscene.update(
                 where={"id": scene.id},
-                data={"videoStatus": "GENERATING", "videoStartedAt": now},
+                data={"videoStatus": "GENERATING", "videoStartedAt": now, "videoError": None},
             )
 
         # 초기 진행률 전송
@@ -233,6 +248,7 @@ async def _generate_scene_video(
                 image_prompt=getattr(scene, "imagePrompt", None),
                 motion_prompt=getattr(scene, "motionPrompt", None),
                 character_name=char_info.get("name", ""),
+                veo_prompt=char_info.get("veo_prompt", ""),
                 world_context=char_info.get("world_context", ""),
                 art_style=char_info.get("art_style", ""),
                 series_description=char_info.get("series_description", ""),
@@ -320,15 +336,47 @@ async def _generate_scene_video(
 
         except Exception as exc:
             error_msg = str(exc)[:500]
-            logger.exception("장면 영상 생성 실패: scene_id=%s", scene.id)
+            logger.warning("장면 영상 생성 실패 (1회 자동 재시도): scene_id=%s, err=%s", scene.id, error_msg[:100])
 
-            await db.storyboardscene.update(
-                where={"id": scene.id},
-                data={
-                    "videoStatus": "FAILED",
-                    "videoError": error_msg,
-                },
-            )
+            # ── 자동 1회 재시도 ──
+            retry_success = False
+            try:
+                logger.info("자동 재시도 시작: scene=%s", scene.id)
+                await db.storyboardscene.update(
+                    where={"id": scene.id},
+                    data={"videoStatus": "GENERATING", "videoError": None},
+                )
+                retry_generator = get_generator()
+                retry_url = await retry_generator.generate(
+                    prompt=prompt,
+                    image_url=image_url,
+                    duration=int(scene.duration),
+                    aspect_ratio="1:1",
+                )
+                retry_video_url = await _download_and_upload(retry_url, user_id)
+                if retry_video_url:
+                    await db.storyboardscene.update(
+                        where={"id": scene.id},
+                        data={
+                            "videoStatus": "COMPLETED",
+                            "videoUrl": retry_video_url,
+                            "videoError": None,
+                        },
+                    )
+                    logger.info("자동 재시도 성공: scene=%s", scene.id)
+                    retry_success = True
+            except Exception as retry_exc:
+                logger.exception("자동 재시도도 실패: scene_id=%s", scene.id)
+                error_msg = f"재시도 실패: {str(retry_exc)[:400]}"
+
+            if not retry_success:
+                await db.storyboardscene.update(
+                    where={"id": scene.id},
+                    data={
+                        "videoStatus": "FAILED",
+                        "videoError": error_msg,
+                    },
+                )
 
             completed_durations.append(time.monotonic() - scene_start)
 
@@ -427,6 +475,7 @@ async def _get_character_seed_data(storyboard_id: str) -> dict:
             "world_context": getattr(c, "worldContext", "") or "",
             "series_description": getattr(c, "seriesDescription", "") or "",
             "prompt_features": c.promptFeatures,
+            "veo_prompt": getattr(c, "veoPrompt", "") or "",
             "enriched_background": enriched_background,
             "enriched_mood": enriched_mood,
         }
@@ -440,6 +489,7 @@ async def _get_character_seed_data(storyboard_id: str) -> dict:
             "extra_images": "",
             "world_context": "",
             "prompt_features": getattr(cc, "veoPrompt", "") or cc.description,
+            "veo_prompt": getattr(cc, "veoPrompt", "") or cc.description,
             "enriched_background": enriched_background,
             "enriched_mood": enriched_mood,
         }
@@ -489,9 +539,56 @@ async def _download_and_upload(
     # ── 디버그: 다운로드된 영상의 실제 해상도 확인 ──
     await _log_video_dimensions(video_bytes)
 
+    # ── 레터박스 적용: 720x720 → 1080x1920 (9:16) ──
+    video_bytes = await _apply_letterbox(video_bytes)
+
     s3_url = await asyncio.to_thread(upload_video, video_bytes, user_id)
     logger.info("영상 S3 업로드 완료: %s", s3_url[:80] if s3_url else "None")
     return s3_url
+
+
+async def _apply_letterbox(video_bytes: bytes) -> bytes:
+    """720x720 → 1080x1920 레터박스 변환 (상하 검은 여백)"""
+    import tempfile
+
+    tmp_in = None
+    tmp_out = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            f.write(video_bytes)
+            tmp_in = f.name
+        tmp_out = tmp_in.replace(".mp4", "_lb.mp4")
+
+        cmd = [
+            "ffmpeg", "-y", "-i", tmp_in,
+            "-vf", "scale=1080:1080:force_original_aspect_ratio=decrease,"
+                   "pad=1080:1920:0:420:black",
+            "-c:a", "copy",
+            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+            "-movflags", "+faststart",
+            tmp_out,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            logger.error("레터박스 ffmpeg 실패: %s", stderr.decode()[-500:])
+            return video_bytes  # 실패 시 원본 반환
+
+        with open(tmp_out, "rb") as f:
+            result = f.read()
+        logger.info("레터박스 적용 완료: %d → %d bytes", len(video_bytes), len(result))
+        return result
+    except Exception:
+        logger.exception("레터박스 적용 예외, 원본 사용")
+        return video_bytes
+    finally:
+        for p in (tmp_in, tmp_out):
+            if p and os.path.exists(p):
+                os.unlink(p)
 
 
 async def _log_video_dimensions(video_bytes: bytes) -> None:

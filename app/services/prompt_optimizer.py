@@ -19,34 +19,13 @@ logger = logging.getLogger(__name__)
 # ── 장면 유형별 자연스러운 동작 보강 키워드 ──
 
 MOTION_ENHANCERS: dict[str, str] = {
-    "cooking": (
-        "Only arms and hands move with gentle stirring motion. "
-        "Face expression, face shape, body shape, colors stay FROZEN."
-    ),
-    "eating": (
-        "Only hands move toward mouth, slight head nod. "
-        "Face expression, face shape, body shape, colors stay FROZEN."
-    ),
-    "walking": (
-        "Only legs move with small steps, slight arm swing. "
-        "Face expression, face shape, body shape, colors stay FROZEN."
-    ),
-    "action": (
-        "Only arms move with controlled motion. "
-        "Face expression, face shape, body proportions, colors stay FROZEN."
-    ),
-    "sitting": (
-        "Only slight breathing motion, tiny body sway. "
-        "Face expression, face shape, body shape, colors stay FROZEN."
-    ),
-    "talking": (
-        "Only mouth moves slightly, gentle head tilt. "
-        "Face expression unchanged, face shape, body shape, colors stay FROZEN."
-    ),
-    "default": (
-        "Only subtle natural idle motion. "
-        "Face expression, face shape, body shape, colors stay FROZEN."
-    ),
+    "cooking": "Lively cooking motion, stirring and chopping with both arms.",
+    "eating": "Cheerful eating motion, hands moving to mouth, head bobbing.",
+    "walking": "Natural walking motion with arm swing and bouncy steps.",
+    "action": "Dynamic action motion, expressive arm and body movement.",
+    "sitting": "Relaxed sitting with gentle body sway and hand gestures.",
+    "talking": "Animated talking with mouth movement, head tilts and hand gestures.",
+    "default": "Natural lively body motion with expressive movement.",
 }
 
 # ── 동작 키워드 → 장면 유형 매핑 ──
@@ -304,6 +283,7 @@ def build_hailuo_prompt(
     image_prompt: str | None = None,
     motion_prompt: str | None = None,
     character_name: str = "",
+    veo_prompt: str = "",
     world_context: str = "",
     art_style: str = "",
     series_description: str = "",
@@ -330,12 +310,17 @@ def build_hailuo_prompt(
 
     parts: list[str] = []
 
-    # 1. 카메라 ([Static shot] 고정 — 캐릭터 보존 최우선)
-    parts.append("[Static shot]")
+    # 1. 카메라 (고정 배경, 캐릭터는 자유롭게 움직임)
+    parts.append("[Static camera, fixed background]")
 
-    # 2. 리서치 검증된 캐릭터 보존 키워드 (고효과, 반드시 카메라 직후)
+    # 2. 캐릭터 외형 명시 + 보존 + 해부학 제약 (카메라 직후 최우선)
+    if veo_prompt:
+        parts.append(f"{veo_prompt}.")
+    elif character_name:
+        parts.append(f"{character_name}.")
     parts.append(
-        "Preserve exact character colors and design from reference image."
+        "Preserve exact character design from reference image."
+        " Exactly two arms, two hands, one mouth, one face."
     )
 
     # 3. 장면 배경/장소 — _extract_scene_context로 간략 추출
@@ -368,18 +353,18 @@ def build_hailuo_prompt(
     # 6. 동작 보강 (자연스러운 움직임 + FROZEN 키워드)
     parts.append(motion_enhancer)
 
-    # 7. 품질 마무리 (리서치 고효과 키워드)
+    # 7. 품질 마무리
     parts.append(
-        "Smooth fluid animation, consistent character appearance."
+        "Smooth fluid animation, consistent character design, stable background."
     )
 
     # 자연스러운 문장형 조합
     prompt = " ".join(p for p in parts if p)
 
-    # 60단어 제한 (짧을수록 캐릭터 보존 우수 — v4 90 → v5 60)
+    # 65단어 제한 (v5 60 → v6 65, 해부학 제약 추가분)
     words = prompt.split()
-    if len(words) > 60:
-        prompt = " ".join(words[:60])
+    if len(words) > 65:
+        prompt = " ".join(words[:65])
 
     logger.info(
         "Hailuo 프롬프트 v5: scene=%d, type=%s, words=%d, "

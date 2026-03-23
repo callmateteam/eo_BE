@@ -547,16 +547,31 @@ async def _mix_bgm(
 
     vol = bgm_setting.volume
     fade_in = "afade=t=in:d=1.5,"
+
+    # 영상 길이를 구해서 fade out 시작점 계산
+    fade_out_st = 25.0  # fallback
+    try:
+        probe = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", input_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await probe.communicate()
+        dur = float(out.decode().strip())
+        fade_out_st = max(0, dur - 3)
+    except Exception:
+        pass
+
     if has_tts:
         fc = (
-            f"[1:a]{fade_in}volume={vol},afade=t=out:st=-3:d=3[bgm];"
+            f"[1:a]{fade_in}volume={vol},afade=t=out:st={fade_out_st}:d=3[bgm];"
             f"[bgm][0:a]sidechaincompress="
             f"threshold=0.03:ratio=4:attack=1000:release=2000:knee=6:level_sc=1[ducked];"
             f"[0:a][ducked]amix=inputs=2:duration=first:normalize=0[aout]"
         )
     else:
         fc = (
-            f"[1:a]{fade_in}volume={vol},afade=t=out:st=-3:d=3[bgm];"
+            f"[1:a]{fade_in}volume={vol},afade=t=out:st={fade_out_st}:d=3[bgm];"
             f"[0:a][bgm]amix=inputs=2:duration=first:normalize=0[aout]"
         )
 
@@ -617,7 +632,7 @@ def _generate_ass(subtitles: list, output_path: str) -> None:
         # 색상: 항상 흰색 고정 (숏폼 가독성 + 검은 배경 대비)
         primary = _hex_to_ass_color("#FFFFFF")
         outline_color = _hex_to_ass_color(getattr(s, 'outline_color', '#000000'))
-        outline_size = getattr(s, 'outline_size', 4)
+        outline_size = getattr(s, 'outline_size', 2)
         shadow_depth = s.shadow.offset if s.shadow.enabled else 0
         is_bold = 1 if getattr(s, 'bold', True) else 0
         is_italic = 1 if getattr(s, 'italic', False) else 0
@@ -744,12 +759,23 @@ async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> N
     logger.info("[디버그] 자막번인 입력: %s", pre_dim)
 
     fonts_dir = _get_fonts_dir()
-    # 1:1 영상을 1080x1920 프레임 가운데 배치 후 ASS 자막 번인
-    vf = (
-        f"scale=1080:1080:force_original_aspect_ratio=decrease,"
-        f"pad=1080:1920:0:420:black,"
-        f"ass={ass_path}:fontsdir={fonts_dir}"
-    )
+    # 입력 해상도 확인 → 이미 9:16이면 레터박스 skip
+    is_vertical = False
+    if pre_dim:
+        try:
+            w, h = [int(x) for x in pre_dim.split("x")]
+            is_vertical = (h > w * 1.5)
+        except Exception:
+            pass
+
+    if is_vertical:
+        vf = f"ass={ass_path}:fontsdir={fonts_dir}"
+    else:
+        vf = (
+            f"scale=1080:1080:force_original_aspect_ratio=decrease,"
+            f"pad=1080:1920:(ow-iw)/2:420:black,"
+            f"ass={ass_path}:fontsdir={fonts_dir}"
+        )
     logger.info("[디버그] 자막번인 vf: %s", vf[:200])
     cmd = [
         "ffmpeg",
@@ -777,12 +803,25 @@ async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> N
 
 
 async def _frame_to_shortform(input_path: str, output_path: str) -> None:
-    """1:1 영상을 1080x1920 숏폼 프레임으로 변환 (자막 없는 경우)"""
-    # ── 디버그: 입력 해상도 확인 ──
+    """영상을 1080x1920 숏폼 프레임으로 변환 (자막 없는 경우)"""
     pre_dim = await _get_video_dimensions(input_path)
     logger.info("[디버그] 숏폼 프레임 입력: %s", pre_dim)
 
-    vf = "scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1920:0:420:black"
+    # 이미 9:16이면 복사만
+    is_vertical = False
+    if pre_dim:
+        try:
+            w, h = [int(x) for x in pre_dim.split("x")]
+            is_vertical = (h > w * 1.5)
+        except Exception:
+            pass
+
+    if is_vertical:
+        import shutil
+        shutil.copy2(input_path, output_path)
+        return
+
+    vf = "scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:420:black"
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,

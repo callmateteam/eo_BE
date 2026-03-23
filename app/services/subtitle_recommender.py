@@ -58,7 +58,7 @@ Also generate short, trendy subtitle TEXT for each scene.
 
 Output ONLY a JSON array matching the number of scenes. Each element:
 {"font":"...","animation":"...","color":"#...","font_size":36,\
-"outline_size":4,"outline_color":"#000000","bold":true,\
+"outline_size":2,"outline_color":"#000000","bold":true,\
 "text":"짧은 자막 텍스트"}
 IMPORTANT: Do NOT include "color" or "outline_color" in your response. \
 Those are fixed to white/black and user can customize later."""
@@ -218,6 +218,6 @@ def _default_style() -> SubtitleStyle:
         shadow=ShadowStyle(enabled=True, color="#000000", offset=3),
         background=BackgroundStyle(enabled=False),
         outline_color="#000000",
-        outline_size=4,
+        outline_size=2,
         animation=SubtitleAnimation.POPUP,
     )

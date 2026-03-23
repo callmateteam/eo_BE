@@ -150,7 +150,7 @@ def _generate_merge_ass(scenes: list[SceneInput]) -> str:
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         "Style: Default,Pretendard,48,&H00FFFFFF,&H000000FF,"
-        "&H00000000,&H00000000,1,0,0,0,100,100,2,0,1,4,0,2,20,20,80,1\n\n"
+        "&H00000000,&H00000000,1,0,0,0,100,100,2,0,1,2,0,2,20,20,80,1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
         "MarginV, Effect, Text\n"
@@ -158,19 +158,28 @@ def _generate_merge_ass(scenes: list[SceneInput]) -> str:
 
     events: list[str] = []
     elapsed = 0.0
+    fade_duration = 0.4  # crossfade 겹침 보정
 
-    for scene in scenes:
+    for i, scene in enumerate(scenes):
         if not scene.narration or scene.narration_style == "none":
-            elapsed += scene.duration
+            if i == 0:
+                elapsed += scene.duration
+            else:
+                elapsed += scene.duration - fade_duration
             continue
 
         _, subtitle_text = _parse_narration(scene.narration)
         if not subtitle_text:
-            elapsed += scene.duration
+            if i == 0:
+                elapsed += scene.duration
+            else:
+                elapsed += scene.duration - fade_duration
             continue
 
         start_ts = _seconds_to_ass_ts(elapsed)
-        end_ts = _seconds_to_ass_ts(elapsed + scene.duration)
+        # 자막 길이는 씬 duration에서 crossfade 빼기
+        actual_duration = scene.duration - fade_duration if i > 0 else scene.duration
+        end_ts = _seconds_to_ass_ts(elapsed + actual_duration)
 
         # 팝업 애니메이션 (트렌디 숏폼 스타일)
         anim = (
@@ -182,7 +191,10 @@ def _generate_merge_ass(scenes: list[SceneInput]) -> str:
             f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{anim}{subtitle_text}"
         )
 
-        elapsed += scene.duration
+        if i == 0:
+            elapsed += scene.duration
+        else:
+            elapsed += scene.duration - fade_duration
 
     return header + "\n".join(events) + "\n"
 
@@ -372,8 +384,7 @@ async def merge_storyboard_video(
             pre_dim, os.path.basename(mixed_video),
         )
 
-        # 4e) 1:1 영상을 1080x1920 프레임 가운데 배치 + 자막 하단 검은 영역
-        # 레이아웃: 상단 420px 검정 | 가운데 1080x1080 영상 | 하단 420px 검정 (자막)
+        # 4e) 영상을 1080x1920 프레임 가운데 배치 + 자막 하단 검은 영역
         framed_video = os.path.join(tmpdir, "framed.mp4")
         has_subs = any(
             s.narration and s.narration_style != "none" and "||" in (s.narration or "")
@@ -385,32 +396,53 @@ async def merge_storyboard_video(
             "assets", "fonts",
         )
 
-        # ASS 자막: PlayResY=1920 기준 MarginV=80 → 하단 검은 영역 내 배치
-        if has_subs:
-            vf_filter = (
-                f"scale=1080:1080:force_original_aspect_ratio=decrease,"
-                f"pad=1080:1920:0:420:black,"
-                f"ass={ass_path}:fontsdir={fonts_dir}"
-            )
+        # 입력 해상도 확인 → 이미 9:16이면 레터박스 skip
+        input_dim = await _get_video_dimensions(mixed_video)
+        is_already_vertical = False
+        if input_dim:
+            try:
+                w, h = [int(x) for x in input_dim.split("x")]
+                is_already_vertical = (h > w * 1.5)  # 9:16 비율
+            except Exception:
+                pass
+
+        if is_already_vertical:
+            # 이미 1080x1920 → 자막만 번인
+            if has_subs:
+                vf_filter = f"ass={ass_path}:fontsdir={fonts_dir}"
+            else:
+                vf_filter = None
         else:
-            vf_filter = (
-                "scale=1080:1080:force_original_aspect_ratio=decrease,"
-                "pad=1080:1920:0:420:black"
-            )
+            # 1:1 → 1080x1920 레터박스 + 자막
+            if has_subs:
+                vf_filter = (
+                    f"scale=1080:1080:force_original_aspect_ratio=decrease,"
+                    f"pad=1080:1920:(ow-iw)/2:420:black,"
+                    f"ass={ass_path}:fontsdir={fonts_dir}"
+                )
+            else:
+                vf_filter = (
+                    "scale=1080:1080:force_original_aspect_ratio=decrease,"
+                    "pad=1080:1920:(ow-iw)/2:420:black"
+                )
 
-        logger.info("[디버그] vf_filter: %s", vf_filter[:200])
+        logger.info("[디버그] vf_filter: %s, is_already_vertical: %s", vf_filter[:200] if vf_filter else "None", is_already_vertical)
 
-        frame_cmd = [
-            "ffmpeg", "-y",
-            "-i", mixed_video,
-            "-vf", vf_filter,
-            "-c:a", "copy",
-            "-c:v", "libx264",
-            "-crf", "18",
-            "-preset", "medium",
-            "-movflags", "+faststart",
-            output_path,
-        ]
+        if vf_filter:
+            frame_cmd = [
+                "ffmpeg", "-y",
+                "-i", mixed_video,
+                "-vf", vf_filter,
+                "-c:a", "copy",
+                "-c:v", "libx264",
+                "-crf", "18",
+                "-preset", "medium",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+        else:
+            # 이미 9:16이고 자막 없으면 그대로 복사
+            frame_cmd = ["ffmpeg", "-y", "-i", mixed_video, "-c", "copy", output_path]
         await _run_ffmpeg(frame_cmd)
 
         # ── 디버그: 레터박스 적용 후 최종 해상도 확인 ──
@@ -450,13 +482,19 @@ def _build_audio_mix_cmd(
     input_idx = 1
     audio_inputs: list[tuple[int, int, float]] = []  # (ffmpeg_idx, scene_idx, delay)
 
+    # crossfade 보정: 씬 간 0.4초 겹침
+    fade_duration = 0.4
     elapsed = 0.0
     for i, scene in enumerate(scenes):
         if i in audio_files:
             cmd.extend(["-i", audio_files[i]])
             audio_inputs.append((input_idx, i, elapsed))
             input_idx += 1
-        elapsed += scene.duration
+        # 다음 씬 시작 = 현재 씬 duration - crossfade 겹침 (첫 씬 제외)
+        if i == 0:
+            elapsed += scene.duration
+        else:
+            elapsed += scene.duration - fade_duration
 
     # filter_complex로 딜레이 + 믹스
     filters: list[str] = []
@@ -519,9 +557,23 @@ def _build_bgm_mix_cmd(
     vol = bgm_volume if has_tts else bgm_volume * 0.75
     fade_in = "afade=t=in:d=1.5,"
 
+    # 영상 길이를 구해서 fade out 시작점 계산
+    fade_out_st = 25.0  # fallback
+    try:
+        import subprocess
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        dur = float(probe.stdout.strip())
+        fade_out_st = max(0, dur - 3)
+    except Exception:
+        pass
+
     if has_tts:
         fc = (
-            f"[1:a]{fade_in}volume={vol},afade=t=out:st=-3:d=3[bgm];"
+            f"[1:a]{fade_in}volume={vol},afade=t=out:st={fade_out_st}:d=3[bgm];"
             f"[bgm][0:a]sidechaincompress="
             f"threshold=0.03:ratio=4:"
             f"attack=1000:release=2000:"
@@ -531,7 +583,7 @@ def _build_bgm_mix_cmd(
         )
     else:
         fc = (
-            f"[1:a]{fade_in}volume={vol},afade=t=out:st=-3:d=3[bgm];"
+            f"[1:a]{fade_in}volume={vol},afade=t=out:st={fade_out_st}:d=3[bgm];"
             f"[0:a][bgm]amix=inputs=2:"
             f"duration=first:normalize=0[aout]"
         )

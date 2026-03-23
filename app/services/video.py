@@ -69,7 +69,7 @@ _PIKA_MAX_WAIT = 300
 
 # Hailuo 폴링 설정
 _HAILUO_POLL_INTERVAL = 8
-_HAILUO_MAX_WAIT = 360  # 최대 6분 (Standard 평균 4분)
+_HAILUO_MAX_WAIT = 600  # 최대 10분 (동시 요청 시 큐잉 대비)
 
 # 폴링 기본값
 _POLL_INTERVAL = 5  # 초

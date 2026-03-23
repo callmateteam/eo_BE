@@ -92,7 +92,12 @@ async def connect_youtube(user_id: str, code: str, redirect_uri: str) -> dict:
     """
     tokens = await exchange_code_for_tokens(code, redirect_uri)
 
-    channel_info = await get_channel_info(tokens["access_token"])
+    # 채널 정보 조회 (readonly scope 없으면 skip)
+    try:
+        channel_info = await get_channel_info(tokens["access_token"])
+    except Exception:
+        logger.warning("YouTube 채널 정보 조회 실패 (scope 부족), skip")
+        channel_info = {"channel_id": "", "channel_title": "YouTube 연동됨"}
 
     await db.user.update(
         where={"id": user_id},
