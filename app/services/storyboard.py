@@ -62,6 +62,43 @@ _COPYRIGHT_RE = re.compile(
 )
 
 
+# ── 비속어/과도한 슬랭 필터 ──
+
+_PROFANITY_WORDS: list[str] = [
+    "씹", "존나", "좆", "병신", "지랄", "미친놈", "미친년", "ㅅㅂ", "ㅂㅅ", "ㅈㄹ",
+    "개새", "개년", "개놈", "시발", "씨발", "꺼져", "닥쳐",
+]
+
+_SLANG_REPLACEMENTS: dict[str, str] = {
+    "킹받": "짜증",
+    "개웃": "재밌",
+    "개멋": "멋있",
+    "개쩔": "대단",
+    "개빡": "화나",
+    "현피": "대결",
+    "미쳤다": "대단하다",
+    "미쳤": "대단했",
+    "존맛": "맛있",
+    "ㅋㅋㅋ": "",
+    "ㅎㅎㅎ": "",
+    "ㄹㅇ": "정말",
+}
+
+
+def _filter_profanity(text: str) -> str:
+    """비속어 제거 + 과도한 슬랭 순화"""
+    if not text:
+        return text
+    result = text
+    for word in _PROFANITY_WORDS:
+        result = result.replace(word, "")
+    for slang, replacement in _SLANG_REPLACEMENTS.items():
+        result = result.replace(slang, replacement)
+    # 연속 공백 정리
+    result = re.sub(r"\s{2,}", " ", result).strip()
+    return result or text
+
+
 def _strip_copyright_names(prompt: str) -> str:
     """이미지 생성 프롬프트에서 저작권 캐릭터/시리즈/스튜디오 이름 제거"""
     cleaned = _COPYRIGHT_RE.sub("", prompt)
@@ -127,28 +164,31 @@ Also include this secondary character in imagePrompt scenes \
 where they appear. Keep secondary character poses simple: \
 arms at sides, arms crossed, hands in pockets, or hands behind back. \
 Avoid complex hand gestures for ALL characters.
-- narration: Korean subtitle for 2025-2026 short-form video. REQUIRED, never null. \
-MAX 15 characters. Use trendy Gen-Z Korean internet slang. \
-MUST reflect what's actually happening in THIS specific scene. \
-Style rules: \
-  - NEVER use "~합니다/~입니다". Use "~임", "~하는 중", "~각" instead. \
-  - Reactions: "실화냐", "킹받음", "미쳤다", "오열각", "개웃김" \
-  - Situation: "[상황]+각" (망각, 사랑각, 현피각), "[동사]+하는 중" \
-  - Editor voice: "(사실 좋아하는 중)", "결국 이렇게 됨" \
-  - Emphasis: "개~" prefix, "찐", "걍", "어케" \
-Good: "킹받는 중..", "이게 내 잘못임?", "망각 시작ㅋㅋ", "걍 도망치고 싶음" \
-Bad: "헐 대박" (too generic), "피카츄는 놀고 있습니다" (formal narrator) \
-NEVER copy the examples — write unique text matching the scene context. \
-If narrationStyle is "character", write as the character's inner voice.
+- narration: REQUIRED, never null. Format: "TTS나레이션||자막텍스트" \
+TWO parts separated by "||": \
+  PART 1 (before ||): TTS 나레이션 — Korean, 1-2 sentences. \
+    Descriptive narration explaining what happens in this scene. \
+    Write naturally as if narrating a story. \
+    If narrationStyle is "character", write as the character speaking. \
+    If "narrator", write as a third-person narrator. \
+    MAX 40 characters. No slang, no profanity. \
+  PART 2 (after ||): 화면 자막 — Korean, MAX 10 characters. \
+    Short impactful text displayed on screen. \
+    Can be a keyword, question, or reaction. \
+    Casual tone OK but NO profanity, NO vulgar slang. \
+    Banned words: 개(prefix), 씹, 존나, 병신, 미친, 킹받, 현피, ㅅㅂ, ㅂㅅ \
+Good: "쵸파가 칠판 앞에서 설명을 시작해요||2차 방정식이란?" \
+Good: "드디어 공식을 이해했어!||유레카!" \
+Bad: "킹받는 중..||개웃김 각" (vulgar slang)
 - narrationStyle: "character"|"narrator" (always pick one, never "none")
-- bgmMood: overall BGM mood (first scene only): \
-epic/funny/calm/tense/sad/upbeat/mysterious
+- bgmMood: overall BGM mood (first scene only). \
+MUST be one of: energetic/funny/calm/dramatic/sad/happy/mysterious/epic/romantic/horror
 - Vary visual composition: mix close-ups, medium, wide shots across scenes.
 
 [{"title":"","content":"","imagePrompt":"","motionPrompt":"",\
 "duration":5.0,"hasCharacter":true,"secondaryCharacter":null,\
 "secondaryCharacterDesc":null,\
-"narration":"","narrationStyle":"character","bgmMood":"funny"}]"""
+"narration":"나레이션 텍스트||자막 텍스트","narrationStyle":"character","bgmMood":"funny"}]"""
 
 STORYBOARD_USER = """\
 캐릭터: {character_desc}
@@ -292,6 +332,9 @@ async def generate_scenes_with_gpt(
             narration = content_text.split(".")[0].strip()[:200] or None
         if not narration:
             narration_style = "none"
+        # 비속어/슬랭 필터 적용
+        if narration:
+            narration = _filter_profanity(narration)
 
         # 보조 캐릭터 외형 묘사 추출
         sec_desc = str(s.get("secondaryCharacterDesc") or "")[:300]

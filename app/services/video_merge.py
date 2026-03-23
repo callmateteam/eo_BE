@@ -60,13 +60,33 @@ BGM_PRESETS: dict[str, str] = {
     "horror": "bgm/horror.mp3",
 }
 
+# BGM 별칭 매핑 (GPT가 프리셋에 없는 mood를 생성할 때 대응)
+_BGM_ALIASES: dict[str, str] = {
+    "upbeat": "energetic",
+    "cheerful": "happy",
+    "tense": "dramatic",
+    "intense": "epic",
+    "dark": "horror",
+    "romantic": "romantic",
+    "adventure": "epic",
+    "action": "energetic",
+    "emotional": "sad",
+    "peaceful": "calm",
+}
+
 
 def _get_bgm_url(bgm_mood: str | None) -> str | None:
-    """bgmMood → S3 BGM URL 변환 (폴백용)"""
+    """bgmMood → S3 BGM URL 변환 (별칭 매핑 포함)"""
     if not bgm_mood:
         return None
-    key = BGM_PRESETS.get(bgm_mood.lower())
+    mood = bgm_mood.lower()
+    # 별칭 매핑 적용
+    if mood in _BGM_ALIASES:
+        mood = _BGM_ALIASES[mood]
+        logger.info("BGM 별칭 매핑: %s → %s", bgm_mood, mood)
+    key = BGM_PRESETS.get(mood)
     if not key:
+        logger.warning("BGM 프리셋 없음: %s", bgm_mood)
         return None
     bucket = settings.S3_BUCKET
     region = settings.AWS_REGION
@@ -94,52 +114,86 @@ async def _download(url: str, dest: str) -> None:
             f.write(resp.content)
 
 
-def _generate_srt(scenes: list[SceneInput]) -> str:
-    """장면별 나레이션 텍스트를 SRT 자막으로 변환
+def _parse_narration(narration: str) -> tuple[str, str]:
+    """narration에서 TTS 텍스트와 자막 텍스트를 분리.
 
-    긴 자막은 10자 단위로 분할하여 시간 분배.
+    형식: "TTS나레이션||자막텍스트"
+    ||가 없으면 전체를 TTS로, 자막은 빈 문자열.
     """
-    srt_lines: list[str] = []
-    idx = 0
+    if "||" in narration:
+        parts = narration.split("||", 1)
+        tts_text = parts[0].strip()
+        subtitle_text = parts[1].strip()
+        return tts_text, subtitle_text
+    return narration.strip(), ""
+
+
+def _generate_merge_ass(scenes: list[SceneInput]) -> str:
+    """장면별 자막을 ASS 포맷으로 생성 (1080x1920 레터박스 하단 배치).
+
+    narration에서 || 뒤 자막 텍스트를 사용.
+    || 없으면 scene title을 자막으로 사용 (fallback은 빈값 → 자막 생략).
+    """
+    fonts_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "assets", "fonts",
+    )
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        "PlayResX: 1080\n"
+        "PlayResY: 1920\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Default,Pretendard,48,&H00FFFFFF,&H000000FF,"
+        "&H00000000,&H00000000,1,0,0,0,100,100,2,0,1,4,0,2,20,20,80,1\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
+        "MarginV, Effect, Text\n"
+    )
+
+    events: list[str] = []
     elapsed = 0.0
-    max_chars = 10  # 한 자막당 최대 글자 수
 
     for scene in scenes:
         if not scene.narration or scene.narration_style == "none":
             elapsed += scene.duration
             continue
 
-        text = scene.narration.strip()
+        _, subtitle_text = _parse_narration(scene.narration)
+        if not subtitle_text:
+            elapsed += scene.duration
+            continue
 
-        # 짧으면 그대로
-        if len(text) <= max_chars:
-            idx += 1
-            srt_lines.append(str(idx))
-            srt_lines.append(
-                f"{_seconds_to_srt_ts(elapsed)} --> "
-                f"{_seconds_to_srt_ts(elapsed + scene.duration)}"
-            )
-            srt_lines.append(text)
-            srt_lines.append("")
-        else:
-            # 긴 자막 → 10자 단위로 분할, 시간 균등 배분
-            chunks = _split_text(text, max_chars)
-            chunk_dur = scene.duration / len(chunks)
-            for i, chunk in enumerate(chunks):
-                idx += 1
-                c_start = elapsed + i * chunk_dur
-                c_end = elapsed + (i + 1) * chunk_dur
-                srt_lines.append(str(idx))
-                srt_lines.append(
-                    f"{_seconds_to_srt_ts(c_start)} --> "
-                    f"{_seconds_to_srt_ts(c_end)}"
-                )
-                srt_lines.append(chunk)
-                srt_lines.append("")
+        start_ts = _seconds_to_ass_ts(elapsed)
+        end_ts = _seconds_to_ass_ts(elapsed + scene.duration)
+
+        # 팝업 애니메이션 (트렌디 숏폼 스타일)
+        anim = (
+            "{\\fscx0\\fscy0"
+            "\\t(0,150,\\fscx110\\fscy110)"
+            "\\t(150,250,\\fscx100\\fscy100)}"
+        )
+        events.append(
+            f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{anim}{subtitle_text}"
+        )
 
         elapsed += scene.duration
 
-    return "\n".join(srt_lines)
+    return header + "\n".join(events) + "\n"
+
+
+def _seconds_to_ass_ts(seconds: float) -> str:
+    """초 → ASS 타임스탬프 (H:MM:SS.cc)"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    cs = int((seconds % 1) * 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
 def _split_text(text: str, max_chars: int) -> list[str]:
@@ -223,11 +277,11 @@ async def merge_storyboard_video(
 
         await notify(30, "자막 생성 중...")
 
-        # 3) SRT 자막 파일 생성
-        srt_content = _generate_srt(sorted_scenes)
-        srt_path = os.path.join(tmpdir, "subtitles.srt")
-        with open(srt_path, "w", encoding="utf-8") as f:
-            f.write(srt_content)
+        # 3) ASS 자막 파일 생성 (1080x1920 레터박스 하단 배치)
+        ass_content = _generate_merge_ass(sorted_scenes)
+        ass_path = os.path.join(tmpdir, "subtitles.ass")
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_content)
 
         await notify(35, "영상 합성 중...")
 
@@ -318,34 +372,25 @@ async def merge_storyboard_video(
             pre_dim, os.path.basename(mixed_video),
         )
 
-        # 4e) 1:1 영상을 1080x1920 프레임 가운데 배치 + 자막 하단 영역
-        # 레이아웃: 상단 420px | 가운데 1080x1080 영상 | 하단 420px (자막)
+        # 4e) 1:1 영상을 1080x1920 프레임 가운데 배치 + 자막 하단 검은 영역
+        # 레이아웃: 상단 420px 검정 | 가운데 1080x1080 영상 | 하단 420px 검정 (자막)
         framed_video = os.path.join(tmpdir, "framed.mp4")
-        has_subs = any(s.narration and s.narration_style != "none" for s in sorted_scenes)
+        has_subs = any(
+            s.narration and s.narration_style != "none" and "||" in (s.narration or "")
+            for s in sorted_scenes
+        )
 
-        # 1:1 → 1080x1920 가운데 배치 (검정 배경)
-        # 자막: 흰색 고정 (PrimaryColour=&H00FFFFFF), 하단 영역
+        fonts_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "assets", "fonts",
+        )
+
+        # ASS 자막: PlayResY=1920 기준 MarginV=80 → 하단 검은 영역 내 배치
         if has_subs:
-            fonts_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "assets", "fonts",
-            )
             vf_filter = (
                 f"scale=1080:1080:force_original_aspect_ratio=decrease,"
                 f"pad=1080:1920:0:420:black,"
-                f"subtitles={srt_path}"
-                f":fontsdir={fonts_dir}"
-                ":force_style='"
-                "FontName=Pretendard,"
-                "FontSize=20,"
-                "Bold=1,"
-                "PrimaryColour=&H00FFFFFF,"
-                "OutlineColour=&H00000000,"
-                "Outline=3,"
-                "Shadow=0,"
-                "Spacing=2,"
-                "Alignment=2,"
-                "MarginV=150'"
+                f"ass={ass_path}:fontsdir={fonts_dir}"
             )
         else:
             vf_filter = (

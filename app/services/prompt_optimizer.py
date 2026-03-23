@@ -21,31 +21,31 @@ logger = logging.getLogger(__name__)
 MOTION_ENHANCERS: dict[str, str] = {
     "cooking": (
         "Only arms and hands move with gentle stirring motion. "
-        "Head, face shape, body shape, colors stay FROZEN."
+        "Face expression, face shape, body shape, colors stay FROZEN."
     ),
     "eating": (
         "Only hands move toward mouth, slight head nod. "
-        "Face shape, body shape, colors stay FROZEN."
+        "Face expression, face shape, body shape, colors stay FROZEN."
     ),
     "walking": (
         "Only legs move with small steps, slight arm swing. "
-        "Face, body shape, colors stay FROZEN."
+        "Face expression, face shape, body shape, colors stay FROZEN."
     ),
     "action": (
         "Only arms move with controlled motion. "
-        "Face shape, body proportions, colors stay FROZEN."
+        "Face expression, face shape, body proportions, colors stay FROZEN."
     ),
     "sitting": (
         "Only slight breathing motion, tiny body sway. "
-        "Face, body shape, colors stay FROZEN."
+        "Face expression, face shape, body shape, colors stay FROZEN."
     ),
     "talking": (
         "Only mouth moves slightly, gentle head tilt. "
-        "Face shape, body shape, colors stay FROZEN."
+        "Face expression unchanged, face shape, body shape, colors stay FROZEN."
     ),
     "default": (
         "Only subtle natural idle motion. "
-        "Face, body shape, colors stay FROZEN."
+        "Face expression, face shape, body shape, colors stay FROZEN."
     ),
 }
 
