@@ -256,23 +256,22 @@ async def merge_storyboard_video(
 
         await notify(50, "오디오 믹싱 중...")
 
-        # 4c) TTS 오디오 믹스
+        # 4c) 오디오 스트림 보장 (crossfade가 -an으로 오디오 제거하므로, TTS 믹싱 전에 무음 추가)
+        concat_with_audio = os.path.join(tmpdir, "concat_audio.mp4")
+        await _ensure_audio_stream(concat_video, concat_with_audio)
+
+        # 4d) TTS 오디오 믹스
         if audio_files:
             tts_mixed = os.path.join(tmpdir, "tts_mixed.mp4")
             mix_cmd = _build_audio_mix_cmd(
-                concat_video,
+                concat_with_audio,
                 sorted_scenes,
                 audio_files,
                 tts_mixed,
             )
             await _run_ffmpeg(mix_cmd)
         else:
-            tts_mixed = concat_video
-
-        # 4d) BGM 믹싱 전 오디오 스트림 보장 (없으면 무음 추가)
-        tts_with_audio = os.path.join(tmpdir, "tts_audio.mp4")
-        await _ensure_audio_stream(tts_mixed, tts_with_audio)
-        tts_mixed = tts_with_audio
+            tts_mixed = concat_with_audio
 
         # 4e) BGM 시작지점 추천 + 믹스 (TTS 있으면 자동 덕킹)
         if bgm_path:

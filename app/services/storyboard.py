@@ -478,36 +478,47 @@ async def _generate_with_flux_kontext(prompt: str, reference_image_url: str) -> 
     client = get_openai_client()
     max_retries = 3
     for attempt in range(max_retries):
-        async with asyncio.timeout(120):
-            resp = await client.post(
-                "https://fal.run/fal-ai/flux-pro/kontext",
-                headers={
-                    "Authorization": f"Key {settings.FAL_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "prompt": prompt,
-                    "image_url": reference_image_url,
-                    "aspect_ratio": "1:1",
-                    "num_inference_steps": 28,
-                    "guidance_scale": 4.0,
-                    "num_images": 1,
-                    "output_format": "png",
-                    "safety_tolerance": "6",
-                },
-            )
-            if resp.status_code == 429:
-                wait = 10 * (attempt + 1)
-                logger.warning("FLUX Kontext 429 rate limit, %d초 후 재시도 (%d/%d)", wait, attempt + 1, max_retries)
-                await asyncio.sleep(wait)
-                continue
-            if resp.status_code != 200:
-                logger.error(
-                    "FLUX Kontext 이미지 생성 실패 (%s): %s", resp.status_code, resp.text[:500]
+        try:
+            async with asyncio.timeout(180):  # 120→180초 (fal.ai 큐 지연 대응)
+                resp = await client.post(
+                    "https://fal.run/fal-ai/flux-pro/kontext",
+                    headers={
+                        "Authorization": f"Key {settings.FAL_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "prompt": prompt,
+                        "image_url": reference_image_url,
+                        "aspect_ratio": "1:1",
+                        "num_inference_steps": 28,
+                        "guidance_scale": 4.0,
+                        "num_images": 1,
+                        "output_format": "png",
+                        "safety_tolerance": "6",
+                    },
                 )
-                resp.raise_for_status()
-            result = resp.json()
-            break
+                if resp.status_code == 429:
+                    wait = 10 * (attempt + 1)
+                    logger.warning("FLUX Kontext 429 rate limit, %d초 후 재시도 (%d/%d)", wait, attempt + 1, max_retries)
+                    await asyncio.sleep(wait)
+                    continue
+                if resp.status_code != 200:
+                    logger.error(
+                        "FLUX Kontext 이미지 생성 실패 (%s): %s", resp.status_code, resp.text[:500]
+                    )
+                    resp.raise_for_status()
+                result = resp.json()
+                break
+        except TimeoutError:
+            logger.warning(
+                "FLUX Kontext 타임아웃 (%d/%d), %s",
+                attempt + 1, max_retries,
+                "재시도..." if attempt < max_retries - 1 else "최종 실패",
+            )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(5)
+                continue
+            raise
     else:
         raise RuntimeError("FLUX Kontext 이미지 생성 실패: 최대 재시도 초과 (429)")
 
